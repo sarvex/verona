@@ -62,7 +62,7 @@ namespace sandbox
         }
         if (ret == 1)
         {
-          status = {true, static_cast<int>(event.data)};
+          status = {true, static_cast<int>(WEXITSTATUS(event.data))};
         }
         return status;
       }

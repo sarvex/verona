@@ -373,7 +373,7 @@ namespace
       addr,
       length,
       PROT_READ | PROT_WRITE,
-      MAP_FIXED | MAP_SHARED | MAP_NOCORE,
+      MAP_FIXED | MAP_SHARED | platform::detail::map_nocore,
       SharedMemRegion,
       0);
 

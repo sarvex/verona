@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(sandbox CXX)
+project(sandbox C CXX)
 
 INCLUDE (CheckCXXSourceCompiles)
 
@@ -78,67 +78,11 @@ target_link_libraries(example sandbox)
 target_link_libraries(sandbox -pthread)
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 	target_link_libraries(library_runner -ldl -lbsd)
-	target_link_libraries(sandbox -ldl -lbsd)
+	target_link_libraries(sandbox -ldl -lbsd -lrt)
 endif()
 
 set_target_properties(example_lib PROPERTIES PREFIX "")
 
-
-add_custom_target(
-	test
-	COMMAND time ./example example && (sha1 example.Z ";" time ./nosandbox example && sha1 example.Z)
-	DEPENDS nosandbox sandbox example library_runner
-)
-
-
-# The clang-format tool is installed under a variety of different names.  Try
-# to find a sensible one.  Only look for 6.0 and 7.0 versions explicitly - we
-# don't know whether our clang-format file will work with newer versions of the
-# tool
-set(CLANG_FORMAT_NAMES
-	clang-format-10.0
-	clang-format-9.0
-	clang-format-8.0
-	clang-format10
-	clang-format90
-	clang-format80
-	clang-format)
-
-# Loop over each of the possible names of clang-format and try to find one.
-set(CLANG_FORMAT CLANG_FORMAT-NOTFOUND)
-foreach (NAME IN ITEMS ${CLANG_FORMAT_NAMES})
-	if (${CLANG_FORMAT} STREQUAL "CLANG_FORMAT-NOTFOUND")
-		find_program(CLANG_FORMAT ${NAME})
-	endif ()
-endforeach()
-
-# If we've found a clang-format tool, generate a target for it, otherwise emit
-# a warning.
-if (${CLANG_FORMAT} STREQUAL "CLANG_FORMAT-NOTFOUND")
-	message(WARNING "Not generating clangformat target, no clang-format tool found")
-else ()
-	message(STATUS "Generating clangformat target using ${CLANG_FORMAT}")
-	set(ALL_SOURCE_FILES
-	${CMAKE_SOURCE_DIR}/${CHILD_SOURCES}
-	${CMAKE_SOURCE_DIR}/${NOSANDBOX_SOURCES}
-	${CMAKE_SOURCE_DIR}/${EXAMPLE_SOURCES}
-	${CMAKE_SOURCE_DIR}/${EXAMPLE_HEADERS}
-	${CMAKE_SOURCE_DIR}/${EXAMPLE_LIB_SOURCES}
-	${CMAKE_SOURCE_DIR}/${LIBSANDBOX_SOURCES}
-	${CMAKE_SOURCE_DIR}/${LIBSANDBOX_HEADERS})
-	if (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
-		add_custom_target(copy_format_file)
-	else ()
-		add_custom_target(
-			copy_format_file
-			COMMAND cmake -E copy ${CMAKE_SOURCE_DIR}/../../.clang-format ${CMAKE_BINARY_DIR}/)
-	endif ()
-	add_custom_target(
-		clangformat
-		COMMAND ${CLANG_FORMAT}
-		-i
-		${ALL_SOURCE_FILES}
-		DEPENDS copy_format_file
-	)
-endif()
+enable_testing()
+add_subdirectory(tests)
 

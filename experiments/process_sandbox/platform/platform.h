@@ -10,6 +10,8 @@
 #ifdef __unix__
 #  include <fcntl.h>
 #endif
+#include <assert.h>
+#include <functional>
 
 #pragma once
 namespace sandbox
@@ -57,7 +59,7 @@ namespace sandbox
           "descriptor");
         return fd >= 0;
       }
-      void reset(int new_fd)
+      void reset(handle_t new_fd)
       {
         if (is_valid())
         {
@@ -67,7 +69,7 @@ namespace sandbox
       }
 
       Handle() = default;
-      Handle(int new_fd) : fd(new_fd) {}
+      Handle(handle_t new_fd) : fd(new_fd) {}
 
       /**
        * Copy constructor is deleted.  File descriptors are not reference
@@ -92,10 +94,32 @@ namespace sandbox
         return *this;
       }
 
-      Handle& operator=(int new_fd)
+      Handle& operator=(handle_t new_fd)
       {
         reset(new_fd);
         return *this;
+      }
+
+      bool operator==(const handle_t other_fd) const
+      {
+        return fd == other_fd;
+      }
+
+      bool operator==(const Handle& other) const
+      {
+        return fd == other.fd;
+      }
+
+      /**
+       * Extract the raw OS handle.  The caller is responsible for any cleanup.
+       * This can be done by constructing a new `Handle` from the result of this
+       * function.
+       */
+      handle_t take()
+      {
+        handle_t ret = fd;
+        fd = -1;
+        return ret;
       }
 
       /**
@@ -112,7 +136,20 @@ namespace sandbox
   }
 }
 
+namespace std
+{
+  template<>
+  struct hash<sandbox::platform::Handle>
+  {
+    size_t operator()(const sandbox::platform::Handle& x) const
+    {
+      return std::hash<sandbox::platform::handle_t>()(x.fd);
+    }
+  };
+}
+
 #include "child_process.h"
 #include "poller.h"
 #include "sandbox.h"
 #include "shm.h"
+#include "socketpair.h"

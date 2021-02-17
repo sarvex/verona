@@ -16,9 +16,7 @@
 #  include <libgen.h>
 #  include <stdio.h>
 #  include <sys/mman.h>
-#  include <sys/socket.h>
 #  include <sys/stat.h>
-#  include <sys/types.h>
 #  include <sys/un.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
@@ -50,9 +48,9 @@ namespace sandbox
      * Add a new socket that we'll wait for.  This can be called from any
      * thread without synchronisation.
      */
-    void register_fd(int socket_fd)
+    void register_fd(platform::Handle& socket)
     {
-      poller.add(socket_fd);
+      poller.add(socket.fd);
     }
     /**
      * Mutex that protects the `ranges` map.
@@ -77,7 +75,7 @@ namespace sandbox
      * A map from file descriptor over which we've received an update request
      * to the sandbox metadata.
      */
-    std::unordered_map<int, Sandbox> ranges;
+    std::unordered_map<platform::Handle, Sandbox> ranges;
     /**
      * Run loop.  Wait for updates from the child.
      */
@@ -94,7 +92,6 @@ namespace sandbox
           std::lock_guard g(m);
           auto r = ranges.find(fd);
           ranges.erase(r);
-          close(fd);
           continue;
         }
         HostServiceRequest rpc;
@@ -262,15 +259,15 @@ namespace sandbox
      */
     void add_range(
       SharedMemoryProvider* memory_provider,
-      int socket_fd,
+      platform::Handle&& socket,
       platform::SharedMemoryMap& page)
     {
       {
         std::lock_guard g(m);
-        ranges[socket_fd] = {memory_provider,
-                             static_cast<uint8_t*>(page.get_base())};
+        register_fd(socket);
+        ranges[std::move(socket)] = {memory_provider,
+                                     static_cast<uint8_t*>(page.get_base())};
       }
-      register_fd(socket_fd);
     }
   };
   /**
@@ -392,16 +389,15 @@ namespace sandbox
   {
     wait_for_child_exit();
     shared_mem->destroy();
-    close(socket_fd);
   }
 
   void SandboxedLibrary::start_child(
     const char* library_name,
     const char* librunnerpath,
     const void* sharedmem_addr,
-    int pagemap_mem,
-    int malloc_rpc_socket,
-    int fd_socket)
+    platform::Handle& pagemap_mem,
+    platform::Handle&& malloc_rpc_socket,
+    platform::Handle&& fd_socket)
   {
     // The library load paths.  We're going to pass all of these to the
     // child as open directory descriptors for the run-time linker to use.
@@ -422,10 +418,10 @@ namespace sandbox
     };
     // Move all of the file descriptors that we're going to use out of the
     // region that we're going to populate.
-    int shm_fd = move_fd(shm.get_handle().fd);
-    pagemap_mem = move_fd(pagemap_mem);
-    fd_socket = move_fd(fd_socket);
-    malloc_rpc_socket = move_fd(malloc_rpc_socket);
+    int shm_fd = move_fd(shm.get_handle().take());
+    pagemap_mem = move_fd(pagemap_mem.take());
+    fd_socket = move_fd(fd_socket.take());
+    malloc_rpc_socket = move_fd(malloc_rpc_socket.take());
     // Open the library binary.  If this fails, kill the child process.  Note
     // that we do this *before* dropping privilege - we don't have to give
     // the child the right to look in the directory that contains this
@@ -442,12 +438,12 @@ namespace sandbox
     }
     // The child process expects to find these in fixed locations.
     shm_fd = dup2(shm_fd, SharedMemRegion);
-    pagemap_mem = dup2(pagemap_mem, PageMapPage);
-    fd_socket = dup2(fd_socket, FDSocket);
+    pagemap_mem = dup2(pagemap_mem.take(), PageMapPage);
+    fd_socket = dup2(fd_socket.take(), FDSocket);
     assert(library);
     library = dup2(library, MainLibrary);
     assert(library == MainLibrary);
-    malloc_rpc_socket = dup2(malloc_rpc_socket, PageMapUpdates);
+    malloc_rpc_socket = dup2(malloc_rpc_socket.take(), PageMapUpdates);
     // These are passed in by environment variable, so we don't need to put
     // them in a fixed place, just after all of the others.
     int rtldfd = OtherLibraries;
@@ -455,7 +451,7 @@ namespace sandbox
     {
       libfd = dup2(libfd, rtldfd++);
     }
-    platform::SandboxCapsicum sb;
+    platform::Sandbox sb;
     sb.restrict_file_descriptors(libdirs, libdirfds);
     closefrom(last_fd);
     // Prepare the arguments to main.  These are going to be the binary name,
@@ -506,17 +502,12 @@ namespace sandbox
     shared_mem->end = pointer_offset(shm.get_base(), shm.get_size());
 
     // Create a pair of sockets that we can use to
-    int malloc_rpc_sockets[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, malloc_rpc_sockets))
-    {
-      err(1, "Failed to create socket pair");
-    }
+    auto malloc_rpc_sockets = platform::SocketPair::create();
     pagemap_owner().add_range(
-      &memory_provider, malloc_rpc_sockets[0], shared_pagemap);
+      &memory_provider, std::move(malloc_rpc_sockets.first), shared_pagemap);
     // Construct a UNIX domain socket.  This will eventually be used to send
     // file descriptors from the parent to the child, but isn't yet.
-    int socks[2];
-    socketpair(AF_UNIX, SOCK_STREAM, 0, socks);
+    auto socks = platform::SocketPair::create();
     std::string path = ".";
     std::string lib;
     // Use dladdr to find the path of the libsandbox shared library.  For now,
@@ -551,14 +542,11 @@ namespace sandbox
         library_name,
         librunnerpath,
         shm_base,
-        shared_pagemap.get_handle().fd,
-        malloc_rpc_sockets[1],
-        socks[1]);
+        shared_pagemap.get_handle(),
+        std::move(malloc_rpc_sockets.second),
+        std::move(socks.second));
     });
-    // Close all of the file descriptors that only the child should have.
-    close(socks[1]);
-    close(malloc_rpc_sockets[1]);
-    socket_fd = socks[0];
+    socket = std::move(socks.first);
     // Allocate an allocator in the shared memory region.
     allocator = new SharedAlloc(
       memory_provider,

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #ifdef __unix__
 #  include <fcntl.h>
+#  include <memory>
 #  include <sys/mman.h>
 #  include <sys/stat.h>
 #  include <sys/types.h>
@@ -27,7 +28,7 @@ namespace sandbox
        * platforms where it isn't supported.
        */
       constexpr int map_nocore =
-#  ifndef MAP_NOCORE
+#  ifdef MAP_NOCORE
         MAP_NOCORE
 #  else
         0
@@ -69,7 +70,7 @@ namespace sandbox
             // filesystem namespace.
             {
               char* name_raw = nullptr;
-              asprintf(&name_raw, "/tmp/verona_sandbox_alloc_%lx", random());
+              asprintf(&name_raw, "/verona_sandbox_alloc_%lx", random());
               name.reset(name_raw);
             }
             // Try to atomically create-and-open the shared memory object with
@@ -77,7 +78,7 @@ namespace sandbox
             // is in use, retry.
             fd = shm_open(
               name.get(), O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
-          } while (!(!fd.is_valid() && (errno == EEXIST)));
+          } while ((!fd.is_valid() && (errno == EEXIST)));
           // If we *did* create the object, unlink it so that we end up with an
           // anonymous shared memory object.
           if (fd.is_valid())
@@ -242,7 +243,8 @@ namespace sandbox
      * descriptor).
      */
     template<typename SharedMemoryObject>
-    class SharedMemoryMapPOSIX : SharedMemoryMapPOSIXBase<SharedMemoryObject>
+    class SharedMemoryMapPOSIX
+    : public SharedMemoryMapPOSIXBase<SharedMemoryObject>
     {
       /**
        * The base class type.  C++ does not allow us to refer to any members in
@@ -278,7 +280,7 @@ namespace sandbox
           Base::map_address = mmap(
             aligned_start,
             Base::size,
-            0 /* No access */,
+            PROT_READ | PROT_WRITE,
             MAP_SHARED | MAP_FIXED | detail::map_nocore,
             Base::get_fd(),
             0);
@@ -287,11 +289,11 @@ namespace sandbox
           // Trim the unused space
           if (aligned_start > region)
           {
-            munmap(region, snmalloc::pointer_diff(aligned_start, region));
+            munmap(region, snmalloc::pointer_diff(region, aligned_start));
           }
           if (map_end < region_end)
           {
-            munmap(region_end, snmalloc::pointer_diff(region_end, map_end));
+            munmap(map_end, snmalloc::pointer_diff(map_end, region_end));
           }
         }
         else
@@ -299,7 +301,7 @@ namespace sandbox
           Base::map_address = mmap(
             0,
             Base::size,
-            0 /* No access */,
+            PROT_READ | PROT_WRITE,
             MAP_SHARED | detail::map_nocore,
             Base::get_fd(),
             0);

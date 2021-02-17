@@ -25,8 +25,8 @@
  * until one of the registered handles is ready or an error occurs.
  */
 
+#include "poller_epoll.h"
 #include "poller_kqueue.h"
-#include "poller_poll.h"
 
 namespace sandbox
 {
@@ -35,8 +35,8 @@ namespace sandbox
     using Poller =
 #ifdef USE_KQUEUE
       KQueuePoller
-#elif defined(__unix__)
-      PollPoller
+#elif defined(__linux__)
+      EPollPoller
 #else
 #  error No poller defined for your platform
 #endif

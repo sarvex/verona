@@ -141,7 +141,7 @@ namespace sandbox
      * The handle to the socket that is used to pass file descriptors to the
      * sandboxed process.
      */
-    handle_t socket_fd;
+    platform::Handle socket;
     /**
      * The platform-specific child process.
      */
@@ -226,9 +226,9 @@ namespace sandbox
       const char* library_name,
       const char* librunnerpath,
       const void* sharedmem_addr,
-      int pagemap_mem,
-      int pagemap_pipe,
-      int fd_socket);
+      platform::Handle& pagemap_mem,
+      platform::Handle&& pagemap_pipe,
+      platform::Handle&& fd_socket);
 
   public:
     /**

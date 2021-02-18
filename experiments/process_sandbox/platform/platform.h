@@ -69,7 +69,12 @@ namespace sandbox
       }
 
       Handle() = default;
-      Handle(handle_t new_fd) : fd(new_fd) {}
+      /**
+       * Construct a `Handle` from the raw OS handle.  This is explicit to
+       * avoid accidentally taking ownership of a handle and closing it when a
+       * temporary `Handle` is destroyed.
+       */
+      explicit Handle(handle_t new_fd) : fd(new_fd) {}
 
       /**
        * Copy constructor is deleted.  File descriptors are not reference
@@ -149,6 +154,7 @@ namespace std
 }
 
 #include "child_process.h"
+#include "onebitsem.h"
 #include "poller.h"
 #include "sandbox.h"
 #include "shm.h"

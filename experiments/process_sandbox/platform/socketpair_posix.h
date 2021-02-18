@@ -19,7 +19,7 @@ namespace sandbox
         {
           err(1, "Failed to create socket pair");
         }
-        return {socks[0], socks[1]};
+        return {Handle(socks[0]), Handle(socks[1])};
       }
     };
   }

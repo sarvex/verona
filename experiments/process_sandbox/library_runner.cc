@@ -299,12 +299,14 @@ namespace sandbox
     {
       while (1)
       {
-        shared_mem->wait(true);
+        while (!shared_mem->token.child.wait(INT_MAX))
+        {
+        }
         if (shared_mem->should_exit)
         {
           exit(0);
         }
-        assert(shared_mem->is_child_executing);
+        assert(shared_mem->token.is_child_executing);
         try
         {
           (*library->functions[shared_mem->function_index])(
@@ -315,7 +317,8 @@ namespace sandbox
           // FIXME: Report error in some useful way.
           printf("Exception!\n");
         }
-        shared_mem->signal(false);
+        shared_mem->token.is_child_executing = false;
+        shared_mem->token.parent.wake();
       }
     }
   };

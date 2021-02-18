@@ -1,9 +1,11 @@
 project(snadbox-tests C CXX)
 set(UNIT_TESTS
 	child_process
+	onebitsem-basic
+	onebitsem-child
+	poller
 	shm
 	socketpair
-	poller
 	)
 
 find_package(Threads REQUIRED)

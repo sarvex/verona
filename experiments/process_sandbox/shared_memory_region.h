@@ -46,91 +46,31 @@ namespace sandbox
      * the parent.
      */
     snmalloc::RemoteAllocator allocator_state;
-#ifdef __unix__
-    /**
-     * Mutex used to protect `cv`.
-     */
-    pthread_mutex_t mutex;
-    /**
-     * The condition variable that the child sleeps on when waiting for
-     * messages from the parent.
-     */
-    pthread_cond_t cv;
-    /**
-     * Flag indicating whether the child is executing.  Set on startup and
-     */
-    std::atomic<bool> is_child_executing = false;
-#endif
-    /**
-     * Waits until the `is_child_executing` flag is in the `expected` state.
-     * This is used to wait for the child to start and to stop.
-     */
-    void wait(bool expected)
-    {
-      pthread_mutex_lock(&mutex);
-      while (expected != is_child_executing)
-      {
-        pthread_cond_wait(&cv, &mutex);
-      }
-      pthread_mutex_unlock(&mutex);
-    }
-    /**
-     * Wait until the `is_child_executing` flag is in the `expected` state.
-     * Returns true if the condition was met or false if the timeout was
-     * exceeded before the child entered the desired state.
-     */
-    bool wait(bool expected, struct timespec timeout)
-    {
-      struct timespec now;
-      clock_gettime(CLOCK_MONOTONIC, &now);
-      long nsec;
-      time_t carry =
-        __builtin_add_overflow(now.tv_nsec, timeout.tv_nsec, &nsec);
-      timeout.tv_nsec = nsec;
-      timeout.tv_sec += now.tv_sec + carry;
-      pthread_mutex_lock(&mutex);
-      pthread_cond_timedwait(&cv, &mutex, &timeout);
-      bool ret = expected == is_child_executing;
-      pthread_mutex_unlock(&mutex);
-      return ret;
-    }
 
     /**
-     * Update the `is_child_executing` flag and wake up any waiters.  Note that
-     * the `wait` functions will only unblock if `is_child_executing` is
-     * modified using this function.
+     * A token that is logically passed from the parent to the child and back
+     * again, where each hands control to the other.
      */
-    void signal(bool new_state)
+    struct
     {
-      pthread_mutex_lock(&mutex);
-      is_child_executing = new_state;
-      pthread_cond_signal(&cv);
-      pthread_mutex_unlock(&mutex);
-    }
-
-    /**
-     * Constructor.  Initialises the mutex and condition variables.
-     */
-    SharedMemoryRegion()
-    {
-      pthread_mutexattr_t mattrs;
-      pthread_mutexattr_init(&mattrs);
-      pthread_mutexattr_setpshared(&mattrs, PTHREAD_PROCESS_SHARED);
-      pthread_mutex_init(&mutex, &mattrs);
-      pthread_condattr_t cvattrs;
-      pthread_condattr_init(&cvattrs);
-      pthread_condattr_setpshared(&cvattrs, PTHREAD_PROCESS_SHARED);
-      pthread_condattr_setclock(&cvattrs, CLOCK_MONOTONIC);
-      pthread_cond_init(&cv, &cvattrs);
-    }
+      /**
+       * Semaphore that the child sleeps on when it's not running.
+       */
+      platform::OneBitSem child{0};
+      /**
+       * Semaphore that the parent sleeps on when the child is running.
+       */
+      platform::OneBitSem parent{0};
+      /**
+       * Flag indicating whether the child is executing.  Used only for
+       * debugging.
+       */
+      std::atomic<bool> is_child_executing = false;
+    } token;
 
     /**
      * Tear down the parent-owned contents of this shared memory region.
      */
-    void destroy()
-    {
-      pthread_mutex_destroy(&mutex);
-      pthread_cond_destroy(&cv);
-    }
+    void destroy() {}
   };
 }

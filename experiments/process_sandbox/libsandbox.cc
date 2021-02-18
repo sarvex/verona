@@ -74,8 +74,14 @@ namespace sandbox
     /**
      * A map from file descriptor over which we've received an update request
      * to the sandbox metadata.
+     *
+     * FIXME: In C++20, we can perform a lookup by `handle_t` even if the key
+     * value is a `Handle`, but we can't in earlier C++ so instead we fudge it
+     * by storing an owning copy of the handle in the value and using the
+     * non-owning value in the value.
      */
-    std::unordered_map<platform::Handle, Sandbox> ranges;
+    std::unordered_map<platform::handle_t, std::pair<platform::Handle, Sandbox>>
+      ranges;
     /**
      * Run loop.  Wait for updates from the child.
      */
@@ -114,7 +120,7 @@ namespace sandbox
           {
             continue;
           }
-          s = r->second;
+          s = r->second.second;
         }
         auto is_large_sizeclass = [](auto large_size) {
           return (large_size < snmalloc::NUM_LARGE_CLASSES);
@@ -265,8 +271,10 @@ namespace sandbox
       {
         std::lock_guard g(m);
         register_fd(socket);
-        ranges[std::move(socket)] = {memory_provider,
-                                     static_cast<uint8_t*>(page.get_base())};
+        platform::handle_t socket_fd = socket.fd;
+        ranges[socket_fd] = std::make_pair(
+          std::move(socket),
+          Sandbox{memory_provider, static_cast<uint8_t*>(page.get_base())});
       }
     }
   };
@@ -438,12 +446,12 @@ namespace sandbox
     }
     // The child process expects to find these in fixed locations.
     shm_fd = dup2(shm_fd, SharedMemRegion);
-    pagemap_mem = dup2(pagemap_mem.take(), PageMapPage);
-    fd_socket = dup2(fd_socket.take(), FDSocket);
+    dup2(pagemap_mem.take(), PageMapPage);
+    dup2(fd_socket.take(), FDSocket);
     assert(library);
     library = dup2(library, MainLibrary);
     assert(library == MainLibrary);
-    malloc_rpc_socket = dup2(malloc_rpc_socket.take(), PageMapUpdates);
+    dup2(malloc_rpc_socket.take(), PageMapUpdates);
     // These are passed in by environment variable, so we don't need to put
     // them in a fixed place, just after all of the others.
     int rtldfd = OtherLibraries;
@@ -557,13 +565,15 @@ namespace sandbox
   {
     shared_mem->function_index = idx;
     shared_mem->msg_buffer = ptr;
-    shared_mem->signal(true);
+    assert(!shared_mem->token.is_child_executing);
+    shared_mem->token.is_child_executing = true;
+    shared_mem->token.child.wake();
     // Wait for a second, see if the child has exited, if it's still going, try
     // again.
     // FIXME: We should probably allow the user to specify a maxmimum execution
     // time for all calls and kill the sandbox and raise an exception if it's
     // taking too long.
-    while (!shared_mem->wait(false, {0, 100000}))
+    while (!shared_mem->token.parent.wait(100))
     {
       if (has_child_exited())
       {
@@ -583,7 +593,9 @@ namespace sandbox
       return exit_status.exit_code;
     }
     shared_mem->should_exit = true;
-    shared_mem->signal(true);
+    assert(!shared_mem->token.is_child_executing);
+    shared_mem->token.is_child_executing = true;
+    shared_mem->token.child.wake();
     return child_proc->wait_for_exit().exit_code;
   }
 

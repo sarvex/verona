@@ -1,6 +1,7 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
 
+#include "cxxapi/cxxsandbox.h"
 #include "sandbox.hh"
 #include "shared.h"
 
@@ -12,7 +13,7 @@ int sum(int a, int b)
   return a + b;
 }
 
-extern "C" void sandbox_init(sandbox::ExportedLibrary* library)
+extern "C" void sandbox_init()
 {
-  library->export_function(::sum);
+  sandbox::ExportedLibrary::export_function(::sum);
 }

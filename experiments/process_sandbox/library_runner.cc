@@ -109,11 +109,6 @@ namespace
   }
 
   /**
-   * A pointer to the object that manages the vtable exported by this library.
-   */
-  ExportedLibrary* library;
-
-  /**
    * The start of the shared memory region.  Passed as a command-line argument.
    */
   void* shared_memory_start = 0;
@@ -129,15 +124,6 @@ namespace
    * correct type.
    */
   SharedMemoryRegion* shared = nullptr;
-
-  /**
-   * The exported function that returns the type encoding of an exported
-   * function.  This is used by the library caller for type checking.
-   */
-  char* exported_types(int idx)
-  {
-    return library->type_encoding(idx);
-  }
 
   /**
    * Synchronous RPC call to the parent environment.  This sends a message to
@@ -260,74 +246,46 @@ namespace sandbox
       MemoryProviderReserve, static_cast<uintptr_t>(large_class)));
   }
 
-  /**
-   * The class that represents the internal side of an exported library.  This
-   * manages a run loop that waits for calls, invokes them, and returns the
-   * result.
-   */
-  class ExportedLibraryPrivate
-  {
-    friend class ExportedLibrary;
-
-    /**
-     * The socket that should be used for passing new file descriptors into
-     * this process.
-     *
-     * Not implemented yet.
-     */
-    __attribute__((unused)) platform::handle_t socket_fd;
-
-    /**
-     * The shared memory region owned by this sandboxed library.
-     */
-    struct SharedMemoryRegion* shared_mem;
-
-  public:
-    /**
-     * Constructor.  Takes the socket over which this process should receive
-     * additional file descriptors and the shared memory region.
-     */
-    ExportedLibraryPrivate(platform::handle_t sock, SharedMemoryRegion* region)
-    : socket_fd(sock), shared_mem(region)
-    {}
-
-    /**
-     * The run loop.  Takes the public interface of this library (effectively,
-     * the library's vtable) as an argument.
-     */
-    void runloop(ExportedLibrary* library)
-    {
-      while (1)
-      {
-        while (!shared_mem->token.child.wait(INT_MAX))
-        {
-        }
-        if (shared_mem->should_exit)
-        {
-          exit(0);
-        }
-        assert(shared_mem->token.is_child_executing);
-        try
-        {
-          (*library->functions[shared_mem->function_index])(
-            shared_mem->msg_buffer);
-        }
-        catch (...)
-        {
-          // FIXME: Report error in some useful way.
-          printf("Exception!\n");
-        }
-        shared_mem->token.is_child_executing = false;
-        shared_mem->token.parent.wake();
-      }
-    }
-  };
-
 }
 
-char* ExportedLibrary::type_encoding(int idx)
+namespace
 {
-  return functions.at(idx)->type_encoding();
+  /**
+   * The function from the loaded library that provides the vtable dispatch
+   * for functions that we invoke.
+   */
+  void (*sandbox_invoke)(int, void*);
+
+  /**
+   * The run loop.  Takes the public interface of this library (effectively,
+   * the library's vtable) as an argument.
+   */
+  void runloop()
+  {
+    while (1)
+    {
+      while (!shared->token.child.wait(INT_MAX))
+      {
+      }
+      if (shared->should_exit)
+      {
+        exit(0);
+      }
+      assert(shared->token.is_child_executing);
+      try
+      {
+        sandbox_invoke(shared->function_index, shared->msg_buffer);
+      }
+      catch (...)
+      {
+        // FIXME: Report error in some useful way.
+        printf("Exception!\n");
+      }
+      shared->token.is_child_executing = false;
+      shared->token.parent.wake();
+    }
+  }
+
 }
 
 namespace
@@ -444,23 +402,21 @@ int main()
 
   // Find the library initialisation function.  This function will generate the
   // vtable.
-  void (*sandbox_init)(ExportedLibrary*) =
-    reinterpret_cast<void (*)(ExportedLibrary*)>(
-      dlfunc(handle, "sandbox_init"));
+  auto sandbox_init =
+    reinterpret_cast<void (*)()>(dlfunc(handle, "sandbox_init"));
   if (sandbox_init == nullptr)
   {
     fprintf(stderr, "dlfunc failed: %s\n", dlerror());
     return 1;
   }
-  // Set up the exported functions
-  ExportedLibraryPrivate* libPrivate;
-  libPrivate = new ExportedLibraryPrivate(FDSocket, shared);
-  library = new ExportedLibrary();
-  library->export_function(exported_types);
-  sandbox_init(library);
+  // Set up the sandbox
+  sandbox_init();
+  sandbox_invoke =
+    reinterpret_cast<decltype(sandbox_invoke)>(dlfunc(handle, "sandbox_call"));
+  assert(sandbox_invoke && "Sandbox invoke invoke function not found");
 
   // Enter the run loop, waiting for calls from trusted code.
-  libPrivate->runloop(library);
+  runloop();
 
   return 0;
 }

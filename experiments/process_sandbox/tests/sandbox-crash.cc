@@ -1,6 +1,7 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
 
+#include "cxxapi/cxxsandbox.h"
 #include "sandbox.hh"
 #include "shared.h"
 

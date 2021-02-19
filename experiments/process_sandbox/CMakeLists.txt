@@ -18,26 +18,6 @@ set(CMAKE_CXX_STANDARD 17)
 if (MSVC)
 else ()
 	add_compile_options(-mcx16 -Wall -Wextra -Werror "$<$<CONFIG:DEBUG>:-fno-inline>")
-	set(LLD_NAMES
-		lld12
-		lld11
-		lld-12
-		lld-11
-		lld)
-	# Loop over each of the possible names of clang-format and try to find one.
-	set(LLD LLD-NOTFOUND)
-	foreach (NAME IN ITEMS ${LLD_NAMES})
-		if (${LLD} STREQUAL "LLD-NOTFOUND")
-			find_program(LLD "ld.${NAME}")
-		endif ()
-	endforeach()
-		if (${LLD} STREQUAL "LLD-NOTFOUND")
-			message(WARNING "Could not find lld, linking may fail")
-		else ()
-			message(STATUS "Linking with ${LLD}")
-			set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=${LLD}")
-			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=${LLD}")
-		endif ()
 endif()
 
 set(DEFAULT_KQUEUE false)

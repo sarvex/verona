@@ -143,13 +143,10 @@ namespace sandbox
     }
 
     /**
-     * Factory method, used by the `Singleton` helper.
+     * Factory method, used by the `Singleton` helper.  This is responsible for
+     * any bootstrapping needed to communicate with the parent.
      */
-    static MemoryProviderProxy* make() noexcept
-    {
-      static MemoryProviderProxy singleton;
-      return &singleton;
-    }
+    static MemoryProviderProxy* make() noexcept;
 
     /**
      * Allocate a chunk.  This implementation is wasteful, rounding the

@@ -96,19 +96,6 @@ namespace
   void bootstrap();
 
   /**
-   * Always-inlined wrapper to call `bootstrap` if bootstrapping is still
-   * needed.
-   */
-  SNMALLOC_FAST_PATH
-  void bootstrap_if_needed()
-  {
-    if (unlikely(!done_bootstrapping))
-    {
-      bootstrap();
-    }
-  }
-
-  /**
    * The start of the shared memory region.  Passed as a command-line argument.
    */
   void* shared_memory_start = 0;
@@ -152,6 +139,16 @@ namespace
     }
     return response.ret;
   }
+}
+
+MemoryProviderProxy* MemoryProviderProxy::make() noexcept
+{
+  if (unlikely(!done_bootstrapping))
+  {
+    bootstrap();
+  }
+  static MemoryProviderProxy singleton;
+  return &singleton;
 }
 
 namespace sandbox
@@ -217,7 +214,6 @@ namespace sandbox
 
   void* MemoryProviderProxy::pop_large_stack(size_t large_class)
   {
-    bootstrap_if_needed();
     return reinterpret_cast<void*>(requestHostService(
       MemoryProviderPopLargeStack, static_cast<uintptr_t>(large_class)));
   }
@@ -225,7 +221,6 @@ namespace sandbox
   void
   MemoryProviderProxy::push_large_stack(Largeslab* slab, size_t large_class)
   {
-    bootstrap_if_needed();
     requestHostService(
       MemoryProviderPushLargeStack,
       reinterpret_cast<uintptr_t>(slab),
@@ -234,14 +229,12 @@ namespace sandbox
 
   void* MemoryProviderProxy::reserve_committed_size(size_t size) noexcept
   {
-    bootstrap_if_needed();
     size_t size_bits = snmalloc::bits::next_pow2_bits(size);
     size_t large_class = std::max(size_bits, SUPERSLAB_BITS) - SUPERSLAB_BITS;
     return reserve_committed(large_class);
   }
   void* MemoryProviderProxy::reserve_committed(size_t large_class) noexcept
   {
-    bootstrap_if_needed();
     return reinterpret_cast<void*>(requestHostService(
       MemoryProviderReserve, static_cast<uintptr_t>(large_class)));
   }
@@ -368,7 +361,6 @@ int main()
 {
   sandbox::platform::Sandbox sb;
   sb.apply_sandboxing_policy();
-  bootstrap_if_needed();
   // Close the shared memory region file descriptor before we call untrusted
   // code.
   close(SharedMemRegion);

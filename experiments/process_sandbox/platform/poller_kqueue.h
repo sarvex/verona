@@ -1,6 +1,6 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
-#ifdef USE_KQUEUE
+#if __has_include(<sys/event.h>)
 #  include <sys/event.h>
 
 namespace sandbox

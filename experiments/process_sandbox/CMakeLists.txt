@@ -21,12 +21,10 @@ set(DEFAULT_PROCDESC false)
 set(DEFAULT_CAPSICUM false)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
-	set(DEFAULT_KQUEUE true)
 	set(DEFAULT_PROCDESC true)
 	set(DEFAULT_CAPSICUM true)
 endif()
 
-set(ENABLE_KQUEUE ${DEFAULT_KQUEUE} CACHE BOOL "Use kqueue for for file descriptor event handling")
 set(ENABLE_PROCDESC ${DEFAULT_PROCDESC} CACHE BOOL "Use process descriptors and kqueue for creating the child process")
 set(ENABLE_CAPSICUM ${DEFAULT_CAPSICUM} CACHE BOOL "Use Capsicum to restruct child process privileges")
 

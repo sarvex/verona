@@ -44,7 +44,7 @@ namespace sandbox
        * unpredictable results.  This isolates all of the details of correctly
        * using the underlying system call.
        */
-      ExitStatus waitpid(int options)
+      ExitStatus waitpid(int options = 0)
       {
         if (status.has_exited)
         {
@@ -100,7 +100,7 @@ namespace sandbox
        */
       ExitStatus wait_for_exit()
       {
-        return waitpid(WNOHANG);
+        return waitpid();
       }
     };
   }

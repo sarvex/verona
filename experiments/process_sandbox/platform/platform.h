@@ -12,6 +12,9 @@
 #endif
 #include <assert.h>
 #include <functional>
+#ifdef __linux__
+#  include <sys/personality.h>
+#endif
 
 #pragma once
 namespace sandbox
@@ -138,6 +141,13 @@ namespace sandbox
 #else
 #  error Handle type not defined for your platform
 #endif
+    void disable_aslr()
+    {
+#ifdef __linux__
+      int p = personality(0xffffffff);
+      personality(p | ADDR_NO_RANDOMIZE);
+#endif
+    }
   }
 }
 

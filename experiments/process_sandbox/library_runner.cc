@@ -18,6 +18,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifndef MAP_FIXED_NOREPLACE
+#  ifdef MAP_EXCL
+#    define MAP_FIXED_NOREPLACE MAP_FIXED | MAP_EXCL
+#  else
+#    define MAP_FIXED_NOREPLACE MAP_FIXED
+#  endif
+#endif
+
 using address_t = snmalloc::Aal::address_t;
 
 // A few small platform-specific tweaks that aren't yet worth adding to the
@@ -258,8 +266,7 @@ namespace
     while (1)
     {
       while (!shared->token.child.wait(INT_MAX))
-      {
-      }
+      {}
       if (shared->should_exit)
       {
         exit(0);
@@ -327,7 +334,7 @@ namespace
       addr,
       length,
       PROT_READ | PROT_WRITE,
-      MAP_FIXED | MAP_SHARED | platform::detail::map_nocore,
+      MAP_FIXED_NOREPLACE | MAP_SHARED | platform::detail::map_nocore,
       SharedMemRegion,
       0);
 

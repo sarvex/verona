@@ -59,14 +59,14 @@ namespace sandbox::platform
       // Note: we always retry with the same timeout because futex doesn't give
       // a mechanism for figuring out how muhc time elapsed if we were
       // interrupted.
-      struct timespec timeout = {milliseconds / 1000,
-                                 (milliseconds % 1000) * 1000000};
+      struct timespec timeout = {
+        milliseconds / 1000, (milliseconds % 1000) * 1000000};
       int ret;
       do
       {
         ret = futex_op(FUTEX_WAIT, 0, &timeout);
       } while ((ret == -1) && (errno == EINTR));
-      assert((ret != -1) || (errno == ETIMEDOUT));
+      assert((ret != -1) || ((errno == ETIMEDOUT) || (errno == EAGAIN)));
       return try_lock();
     }
   };

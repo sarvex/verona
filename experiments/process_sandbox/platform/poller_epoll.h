@@ -60,7 +60,11 @@ namespace sandbox
         // `poll`-based implementation of this interface.  In current use we're
         // going to do several system calls of work between calls to this
         // function and so we shouldn't until it becomes a bottleneck.
-        int ret = epoll_wait(ep, &event, 1, -1);
+        int ret;
+        do
+        {
+          ret = epoll_wait(ep, &event, 1, -1);
+        } while ((ret == -1) && (errno == EINTR));
         if (ret == -1)
         {
           return false;

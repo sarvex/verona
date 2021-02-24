@@ -156,9 +156,10 @@ namespace sandbox
             {
               break;
             }
-            reply = {0,
-                     reinterpret_cast<uintptr_t>(
-                       s.memory_provider->pop_large_stack(large_size))};
+            reply = {
+              0,
+              reinterpret_cast<uintptr_t>(
+                s.memory_provider->pop_large_stack(large_size))};
             break;
           }
           case MemoryProviderReserve:
@@ -168,9 +169,10 @@ namespace sandbox
             {
               break;
             }
-            reply = {0,
-                     reinterpret_cast<uintptr_t>(
-                       s.memory_provider->template reserve<true>(large_size))};
+            reply = {
+              0,
+              reinterpret_cast<uintptr_t>(
+                s.memory_provider->template reserve<true>(large_size))};
             break;
           }
           case ChunkMapSet:
@@ -489,6 +491,7 @@ namespace sandbox
       libdirfds.size() == 3,
       "Number of entries in LD_LIBRARY_PATH_FDS is incorrect");
     const char* const env[] = {"LD_LIBRARY_PATH_FDS=8:9:10", location, nullptr};
+    platform::disable_aslr();
     execve(librunnerpath, args, const_cast<char* const*>(env));
     // Should be unreachable, but just in case we failed to exec, don't return
     // from here (returning from a vfork context is very bad!).

@@ -6,6 +6,7 @@ set(UNIT_TESTS
 	poller
 	shm
 	socketpair
+	socketpair-sendhandle
 	)
 
 set(SANDBOX_TESTS

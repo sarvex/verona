@@ -48,9 +48,17 @@ namespace sandbox
       struct SharedMemoryObjectPOSIX
       {
         /**
+         * Helper that constructs a deleter from a C function, so that it can
+         * be used with `std::unique_ptr`.
+         */
+        template<auto fn>
+        using deleter_from_fn = std::integral_constant<decltype(fn), fn>;
+
+        /**
          * The file descriptor for this object.
          */
         Handle fd;
+
         /**
          * Constructor, tries to construct an anonymous shared memory object by
          * trying to pick a name that doesn't collide and retrying until it
@@ -61,7 +69,7 @@ namespace sandbox
         SharedMemoryObjectPOSIX()
         {
           // RIAA wrapper around some C malloc'd memory for use with aspintf.
-          std::unique_ptr<char, decltype(::free)*> name{nullptr, ::free};
+          std::unique_ptr<char, deleter_from_fn<::free>> name;
           do
           {
             // Create a new random name.  Note that this *looks* like a path,

@@ -46,7 +46,7 @@ target_link_libraries(library_runner Threads::Threads)
 target_link_libraries(sandbox Threads::Threads)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-	target_link_libraries(library_runner -ldl -lbsd)
+	target_link_libraries(library_runner -ldl -lbsd -lseccomp)
 	target_link_libraries(sandbox -ldl -lbsd -lrt)
 endif()
 

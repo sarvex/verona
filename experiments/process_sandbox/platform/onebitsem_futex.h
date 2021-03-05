@@ -57,7 +57,7 @@ namespace sandbox::platform
         return true;
       }
       // Note: we always retry with the same timeout because futex doesn't give
-      // a mechanism for figuring out how muhc time elapsed if we were
+      // a mechanism for figuring out how much time elapsed if we were
       // interrupted.
       struct timespec timeout = {
         milliseconds / 1000, (milliseconds % 1000) * 1000000};

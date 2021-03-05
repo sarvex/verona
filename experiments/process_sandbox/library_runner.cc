@@ -4,6 +4,7 @@
 #include "child_malloc.h"
 #include "host_service_calls.h"
 #include "platform/platform.h"
+#include "privilege_elevation_upcalls.h"
 #include "sandbox.hh"
 #include "shared.h"
 #include "shared_memory_region.h"
@@ -16,6 +17,7 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #ifndef MAP_FIXED_NOREPLACE
@@ -259,11 +261,13 @@ namespace
 
   /**
    * The run loop.  Takes the public interface of this library (effectively,
-   * the library's vtable) as an argument.
+   * the library's vtable) as an argument.  Exits when the upcall depth changes
+   * when waiting
    */
-  void runloop()
+  void runloop(int upcall_depth = 0)
   {
-    while (1)
+	  int new_depth;
+    do
     {
       while (!shared->token.child.wait(INT_MAX))
       {}
@@ -272,24 +276,25 @@ namespace
         exit(0);
       }
       assert(shared->token.is_child_executing);
+      int idx = shared->function_index;
+      void* buf = shared->msg_buffer;
+      shared->msg_buffer = nullptr;
       try
       {
-        sandbox_invoke(shared->function_index, shared->msg_buffer);
+        if ((buf != nullptr) && (sandbox_invoke != nullptr))
+          sandbox_invoke(idx, buf);
       }
       catch (...)
       {
         // FIXME: Report error in some useful way.
         printf("Exception!\n");
       }
+	  new_depth = shared->token.upcall_depth;
       shared->token.is_child_executing = false;
       shared->token.parent.wake();
-    }
+    } while (new_depth == upcall_depth);
   }
 
-}
-
-namespace
-{
   SNMALLOC_SLOW_PATH
   void bootstrap()
   {
@@ -362,16 +367,179 @@ namespace
 
     done_bootstrapping = true;
   }
+
+  using sandbox::platform::Handle;
+  using Socket = sandbox::platform::SocketPair::Socket;
+  /**
+   * The socket that is used for upcalls to the parent process.
+   */
+  Socket upcallSocket;
+
+  /**
+   * Perform an upcall.  This takes the kind of upcall, the data to be sent,
+   * and the file descriptor to send as arguments.  The file descriptor may be
+   * -1, in which case the it is not sent.
+   *
+   *  The return value is the integer result of the upcall and a `Handle` that
+   *  is either invalid or the returned file descriptor.
+   *
+   *  This function should not be called directly, it should be invoked via the
+   *  wrapper.
+   */
+  std::pair<uintptr_t, Handle>
+  upcall(sandbox::UpcallKind k, void* buffer, size_t size, int fd)
+  {
+    Handle out_fd(fd);
+    UpcallRequest req{k, size, reinterpret_cast<uintptr_t>(buffer)};
+    upcallSocket.send(&req, sizeof(req), out_fd);
+    out_fd.take();
+    int depth = ++shared->token.upcall_depth;
+    (void)depth;
+    shared->token.parent.wake();
+    while (!shared->token.child.wait(INT_MAX))
+    {}
+    // runloop(depth);
+    Handle in_fd;
+    UpcallResponse response;
+    upcallSocket.receive(&response, sizeof(response), in_fd);
+    return {response.response, std::move(in_fd)};
+  }
+
+  /**
+   * Perform an upcall, of the specified kind, passing `data`.  The `data`
+   * argument must point to the shared heap.
+   *
+   * If the optional `fd` parameter is passed, then this file descriptor
+   * accompanies the upcall.  This is used for calls such as `openat`.
+   */
+  template<typename T>
+  std::pair<uintptr_t, Handle>
+  upcall(sandbox::UpcallKind k, T* data, int fd = -1)
+  {
+    return upcall(k, data, sizeof(T), fd);
+  }
+
+int upcall_stat(const char* pathname, struct stat* statbuf)
+{
+  auto args = std::make_unique<sandbox::UpcallArgs::Stat>();
+  unique_c_ptr<char> copy;
+  if ((pathname < shared_memory_start) || (pathname >= shared_memory_end))
+  {
+    copy.reset(strdup(pathname));
+    pathname = copy.get();
+  }
+  args->path = reinterpret_cast<uintptr_t>(pathname);
+  args->statbuf = reinterpret_cast<uintptr_t>(statbuf);
+  auto ret = upcall(sandbox::UpcallKind::Stat, args.get());
+  return static_cast<int>(ret.first);
+}
+
+int upcall_openat(int dirfd, const char* pathname, int flags, mode_t mode)
+{
+  (void)dirfd;
+  char buf[128];
+  pid_t pid = getpid();
+  sprintf(buf, "/proc/%d/fd/%%d", (int)pid);
+  int fd = -1;
+  if (sscanf(pathname, buf, &fd) == 1)
+  {
+    return dup(fd);
+  }
+  if (pathname == nullptr)
+  {
+    return -EINVAL;
+  }
+  if (pathname[0] == '/')
+  {
+    auto args = std::make_unique<sandbox::UpcallArgs::Open>();
+    unique_c_ptr<char> copy;
+    if ((pathname < shared_memory_start) || (pathname >= shared_memory_end))
+    {
+      copy.reset(strdup(pathname));
+      pathname = copy.get();
+    }
+    args->path = reinterpret_cast<uintptr_t>(pathname);
+    args->flags = flags;
+    args->mode = mode;
+    auto ret = upcall(sandbox::UpcallKind::Open, args.get());
+    int result = static_cast<int>(ret.first);
+    if (ret.second.is_valid())
+    {
+      result = ret.second.take();
+    }
+    return result;
+  }
+  return -EINVAL;
+}
+
+}
+
+#ifndef USE_CAPSICUM
+extern "C" int openat(int dirfd, const char* pathname, int flags, ...)
+{
+  va_list ap;
+  va_start(ap, flags);
+  mode_t mode = va_arg(ap, mode_t);
+  va_end(ap);
+  int ret = upcall_openat(dirfd, pathname, flags, mode);
+  if (ret < 0)
+  {
+    errno = -ret;
+    return -1;
+  }
+  return ret;
+}
+#endif
+
+void emulate(int signo, siginfo_t* info, ucontext_t* ctx)
+{
+#ifdef __linux__
+  long long arg0 = ctx->uc_mcontext.gregs[REG_RDI];
+  long long arg1 = ctx->uc_mcontext.gregs[REG_RSI];
+  long long arg2 = ctx->uc_mcontext.gregs[REG_RDX];
+  long long arg3 = ctx->uc_mcontext.gregs[REG_R10];
+  if (info->si_syscall == 4)
+  {
+    ctx->uc_mcontext.gregs[REG_RAX] =
+      (greg_t)upcall_stat((const char*)arg0, (struct stat*)arg1);
+    // Advance the instruction pointer after the syscall instruction
+    ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr;
+  }
+  else if (info->si_syscall == 257)
+  {
+    ctx->uc_mcontext.gregs[REG_RAX] =
+      (greg_t)upcall_openat((int)arg0, (const char*)arg1, (int)arg2, (mode_t)arg3);
+    // Advance the instruction pointer after the syscall instruction
+    ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr;
+  }
+  else
+  {
+    fprintf(
+      stderr,
+      "Signal: %d\nFaulting instruction: %p\nSyscall: %d, %p\n",
+      signo,
+      info->si_call_addr,
+      (int)info->si_syscall,
+      ctx);
+  }
+#endif
 }
 
 int main()
 {
-  sandbox::platform::Sandbox sb;
-  sb.apply_sandboxing_policy();
+  sandbox::platform::Sandbox::apply_sandboxing_policy_postexec();
+#ifdef __linux__
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_flags = SA_SIGINFO;
+  sa.sa_sigaction = (void (*)(int, siginfo_t*, void*))emulate;
+  sigaction(SIGSYS, &sa, nullptr);
+#endif
   // Close the shared memory region file descriptor before we call untrusted
   // code.
   close(SharedMemRegion);
   close(PageMapPage);
+  upcallSocket.reset(FDSocket);
 
 #ifndef NDEBUG
   // Check that our bootstrapping actually did the right thing and that
@@ -413,6 +581,9 @@ int main()
   sandbox_invoke =
     reinterpret_cast<decltype(sandbox_invoke)>(dlfunc(handle, "sandbox_call"));
   assert(sandbox_invoke && "Sandbox invoke invoke function not found");
+
+  shared->token.is_child_executing = false;
+  shared->token.is_child_loaded = true;
 
   // Enter the run loop, waiting for calls from trusted code.
   runloop();

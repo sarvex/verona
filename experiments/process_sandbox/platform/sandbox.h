@@ -10,6 +10,7 @@
  */
 
 #include "sandbox_capsicum.h"
+#include "sandbox_seccomp-bpf.h"
 
 namespace sandbox
 {
@@ -27,6 +28,8 @@ namespace sandbox
     using Sandbox =
 #ifdef USE_CAPSICUM
       SandboxCapsicum
+#elif defined(__linux__)
+      SandboxSeccompBPF
 #else
       SandboxNoOp
 #endif

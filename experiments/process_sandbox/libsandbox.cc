@@ -24,10 +24,19 @@
 #    include <bsd/unistd.h>
 #  endif
 #endif
+#include "filetree.h"
 #include "host_service_calls.h"
 #include "platform/sandbox.h"
+#include "privilege_elevation_upcalls.h"
 #include "sandbox.hh"
 #include "shared_memory_region.h"
+
+namespace
+{
+  // The library load paths.  We're going to pass all of these to the
+  // child as open directory descriptors for the run-time linker to use.
+  std::array<const char*, 3> libdirs = {"/lib", "/usr/lib", "/usr/local/lib"};
+}
 
 namespace sandbox
 {
@@ -395,6 +404,149 @@ namespace sandbox
     }
   };
 
+  class SandboxUpcallHandler
+  {
+    ExportedFileTree vfs;
+    friend class SandboxedLibrary;
+    /**
+     * The handle to the socket that is used to pass file descriptors to the
+     * sandboxed process.
+     */
+    platform::SocketPair::Socket socket;
+
+    /**
+     * Convert a raw number from a system call return into either a file
+     * descriptor or the error value.
+     */
+    UpcallHandlerBase::Result return_fd(int fd)
+    {
+      if (fd >= 0)
+      {
+        platform::Handle h(fd);
+        return std::move(h);
+      }
+      return -errno;
+    };
+
+    UpcallHandlerBase::Result return_int(int ret)
+    {
+      return ret >= 0 ? ret : -errno;
+    };
+
+    /**
+     * Copy the path out of the sandbox and canonicalise.
+     */
+    unique_c_ptr<char> get_path(SandboxedLibrary& lib, uintptr_t inSandboxPath)
+    {
+      auto path = lib.strdup_out(reinterpret_cast<char*>(inSandboxPath));
+      unique_c_ptr<char> canonical_path{realpath(path.get(), nullptr)};
+      return canonical_path;
+    };
+
+    template<typename T>
+    void check_pointer(SandboxedLibrary& lib, uintptr_t addr)
+    {
+      T* ptr = reinterpret_cast<T*>(addr);
+      if (lib.contains(ptr, sizeof(T)))
+      {
+        return ptr;
+      }
+    }
+
+    void handle(SandboxedLibrary& lib)
+    {
+      UpcallRequest req;
+      platform::Handle in_fd;
+      socket.receive(&req, sizeof(req), in_fd);
+      fprintf(stderr, "Upcall %d!\n", req.kind);
+
+      auto openfn = make_upcall_handler<UpcallArgs::Open>(
+        [&](SandboxedLibrary& lib, UpcallArgs::Open& args) {
+          auto path = get_path(lib, args.path);
+          auto allowed = vfs.lookup_file(path.get());
+          if (!allowed.has_value())
+          {
+            fprintf(stderr, "File not authorised!\n");
+            return return_int(-ENOENT);
+          }
+          auto fd = allowed.value().first;
+          auto& path_tail = allowed.value().second;
+          if (path_tail != std::string())
+          {
+            fd = openat(fd, path_tail.c_str(), args.flags, args.mode);
+          }
+          else
+          {
+            // FIXME: Ugly hack to work around the lack of a non-owning version
+            // of `Handle`
+            fd = dup(fd);
+          }
+          fprintf(stderr, "Open in parent returned %d\n", fd);
+          return return_fd(fd);
+        });
+
+      auto statfn = make_upcall_handler<UpcallArgs::Stat>(
+        [&](SandboxedLibrary& lib, UpcallArgs::Stat& args) {
+          uintptr_t ret = -EINVAL;
+          struct stat* sb = reinterpret_cast<struct stat*>(args.statbuf);
+          auto path = get_path(lib, args.path);
+          auto allowed = vfs.lookup_file(path.get());
+          if (allowed.has_value())
+          {
+            auto fd = allowed.value().first;
+            auto& path_tail = allowed.value().second;
+            if (path_tail == std::string())
+            {
+              ret = fstat(fd, sb);
+            }
+            else
+            {
+              ret = fstatat(fd, path_tail.c_str(), sb, 0);
+            }
+          }
+          return return_int(ret);
+        });
+
+      UpcallHandlerBase::Result ret;
+      switch (req.kind)
+      {
+        case UpcallKind::Open:
+          fprintf(stderr, "openfn\n");
+          ret = openfn->invoke(lib, req);
+          break;
+        case UpcallKind::Stat:
+          fprintf(stderr, "statfn\n");
+          ret = statfn->invoke(lib, req);
+          break;
+        default:
+        {
+        }
+      }
+
+      fprintf(stderr, "Upcall return\n");
+      socket.send(&ret.integer, sizeof(ret.integer), ret.handle);
+    }
+
+  public:
+    SandboxUpcallHandler()
+    {
+      for (auto libdir : libdirs)
+      {
+        int fd = open(libdir, O_DIRECTORY);
+        if (fd > 0)
+        {
+          vfs.add_directory(libdir, platform::Handle(fd));
+        }
+      }
+      const char* ldsocache = "/etc/ld.so.cache";
+      int fd = open(ldsocache, O_RDONLY);
+      if (fd > 0)
+      {
+        vfs.add_file(ldsocache, platform::Handle(fd));
+      }
+    };
+  };
+
   SandboxedLibrary::~SandboxedLibrary()
   {
     wait_for_child_exit();
@@ -409,9 +561,6 @@ namespace sandbox
     platform::Handle&& malloc_rpc_socket,
     platform::Handle&& fd_socket)
   {
-    // The library load paths.  We're going to pass all of these to the
-    // child as open directory descriptors for the run-time linker to use.
-    std::array<const char*, 3> libdirs = {"/lib", "/usr/lib", "/usr/local/lib"};
     // The file descriptors for the directories in libdirs
     std::array<platform::handle_t, libdirs.size()> libdirfds;
     // The last file descriptor that we're going to use.  The `move_fd`
@@ -492,6 +641,7 @@ namespace sandbox
       "Number of entries in LD_LIBRARY_PATH_FDS is incorrect");
     const char* const env[] = {"LD_LIBRARY_PATH_FDS=8:9:10", location, nullptr};
     platform::disable_aslr();
+    sb.apply_sandboxing_policy_preexec();
     execve(librunnerpath, args, const_cast<char* const*>(env));
     // Should be unreachable, but just in case we failed to exec, don't return
     // from here (returning from a vfork context is very bad!).
@@ -503,7 +653,8 @@ namespace sandbox
     shared_pagemap(snmalloc::bits::next_pow2_bits(snmalloc::OS_PAGE_SIZE)),
     memory_provider(
       pointer_offset(shm.get_base(), sizeof(SharedMemoryRegion)),
-      shm.get_size() - sizeof(SharedMemoryRegion))
+      shm.get_size() - sizeof(SharedMemoryRegion)),
+    upcall_handler(std::make_unique<SandboxUpcallHandler>())
   {
     void* shm_base = shm.get_base();
     // Allocate the shared memory region and set its memory provider to use all
@@ -557,32 +708,73 @@ namespace sandbox
         std::move(malloc_rpc_sockets.second),
         std::move(socks.second));
     });
-    socket = std::move(socks.first);
+    upcall_handler->socket = std::move(socks.first);
     // Allocate an allocator in the shared memory region.
     allocator = new SharedAlloc(
       memory_provider,
       SharedPagemapAdaptor(static_cast<uint8_t*>(shared_pagemap.get_base())),
       &shared_mem->allocator_state);
   }
+
   void SandboxedLibrary::send(int idx, void* ptr)
   {
+    // If this is the first call, we need to handle upcalls while the sandbox
+    // initialises
+    if (is_first_call)
+    {
+      while (!shared_mem->token.is_child_loaded)
+      {
+        if (shared_mem->token.upcall_depth > 0)
+        {
+          shared_mem->token.parent.wait(INT_MAX);
+          upcall_handler->handle(*this);
+          shared_mem->token.upcall_depth--;
+          shared_mem->token.is_child_executing = true;
+          shared_mem->token.child.wake();
+        }
+        else
+        {
+          std::this_thread::sleep_for(1ms);
+        }
+      }
+    }
+    int upcall_depth = shared_mem->token.upcall_depth.load();
     shared_mem->function_index = idx;
     shared_mem->msg_buffer = ptr;
     assert(!shared_mem->token.is_child_executing);
     shared_mem->token.is_child_executing = true;
     shared_mem->token.child.wake();
-    // Wait for a second, see if the child has exited, if it's still going, try
-    // again.
-    // FIXME: We should probably allow the user to specify a maxmimum execution
-    // time for all calls and kill the sandbox and raise an exception if it's
-    // taking too long.
-    while (!shared_mem->token.parent.wait(100))
+    bool handled_upcall;
+    // Wait for a second, see if the child has exited, if it's still going,
+    // try again.
+    // FIXME: We should probably allow the user to specify a maxmimum
+    // execution time for all calls and kill the sandbox and raise an
+    // exception if it's taking too long.
+    do
     {
-      if (has_child_exited())
+      handled_upcall = false;
+      while (!shared_mem->token.parent.wait(100))
       {
-        throw std::runtime_error("Sandboxed library terminated abnormally");
+        if (has_child_exited())
+        {
+          throw std::runtime_error("Sandboxed library terminated abnormally");
+        }
       }
-    }
+      fprintf(stderr, "Parent woke up!\n");
+      // If we were woken up for an upcall, then handle it, wake up the
+      // child, and then continue waiting.
+      // Note that we may be called recursively by the upcall handler to
+      // re-invoke something in the child.  That should only happen for user
+      // callbacks
+      if (shared_mem->token.upcall_depth.load() > upcall_depth)
+      {
+        upcall_handler->handle(*this);
+        shared_mem->token.upcall_depth--;
+        shared_mem->token.child.wake();
+        handled_upcall = true;
+      }
+    } while (handled_upcall);
+    fprintf(stderr, "Returning from message send\n");
   }
   bool SandboxedLibrary::has_child_exited()
   {

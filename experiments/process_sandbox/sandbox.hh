@@ -15,6 +15,7 @@
 #  include <unistd.h>
 #endif
 
+#include "helpers.h"
 #include "platform/platform.h"
 #include "sandbox_fd_numbers.h"
 
@@ -51,6 +52,7 @@ namespace sandbox
   struct SharedMemoryRegion;
   struct SharedPagemapAdaptor;
   struct MemoryProviderBumpPointerState;
+  class SandboxUpcallHandler;
 
   /**
    * An snmalloc Platform Abstraction Layer (PAL) that cannot be used to
@@ -92,9 +94,20 @@ namespace sandbox
      * Predicate to test whether an object of size `sz` starting at `ptr`
      * is within the region managed by this memory provider.
      */
-    bool contains(void* ptr, size_t sz)
+    bool contains(const void* ptr, size_t sz)
     {
-      return (ptr >= base) && (pointer_offset(ptr, sz) < top);
+      // We shouldn't need the const cast here, but pointer_offset doesn't
+      // correctly handle const pointers yet.
+      return (ptr >= base) &&
+        (pointer_offset(const_cast<void*>(ptr), sz) < top);
+    }
+
+    /**
+     * Read the top of the sandbox.
+     */
+    void* top_address()
+    {
+      return top;
     }
   };
 
@@ -143,7 +156,7 @@ namespace sandbox
      * The handle to the socket that is used to pass file descriptors to the
      * sandboxed process.
      */
-    platform::Handle socket;
+    platform::SocketPair::Socket socket;
     /**
      * The platform-specific child process.
      */
@@ -231,6 +244,11 @@ namespace sandbox
       platform::Handle& pagemap_mem,
       platform::Handle&& pagemap_pipe,
       platform::Handle&& fd_socket);
+
+    /**
+     * The delegate that handles upcalls for this sandbox.
+     */
+    std::unique_ptr<SandboxUpcallHandler> upcall_handler;
 
   public:
     /**
@@ -331,7 +349,46 @@ namespace sandbox
       return ptr;
     }
 
+    /**
+     * Copy a string out of the sandbox.  It's easy to introduce TOCTOU bugs
+     * when you use C strings that are stored in untrusted memory, this
+     * provides an easy way of defensively copying them out.
+     */
+    unique_c_ptr<char> strdup_out(const char* str)
+    {
+      if (!contains(str, 1))
+      {
+        return nullptr;
+      }
+      auto maxlen = static_cast<char*>(memory_provider.top_address()) - str;
+      assert(maxlen > 0);
+      auto len = strnlen(str, maxlen);
+      if (len == static_cast<size_t>(maxlen))
+      {
+        return nullptr;
+      }
+      unique_c_ptr<char> ptr;
+      ptr.reset(static_cast<char*>(malloc(len + 1)));
+      memcpy(ptr.get(), str, len);
+      ptr.get()[len] = '\0';
+      return ptr;
+    }
+
+    /**
+     * Predicate to test whether an object of size `sz` starting at `ptr`
+     * is within this sandbox.
+     */
+    bool contains(const void* ptr, size_t sz)
+    {
+      return memory_provider.contains(ptr, sz);
+    }
+
   private:
+    /**
+     * Is this the first time that we've invoked a sandbox?  If so, we will
+     * need to wait for it to be ready before we invoke it.
+     */
+    bool is_first_call = true;
     /**
      * SandboxedFunction is allowed to call the following methods in this class.
      */

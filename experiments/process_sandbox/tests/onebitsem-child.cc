@@ -15,19 +15,21 @@ constexpr int timeout_seconds = 5;
 template<typename Sem>
 void test_sem()
 {
-  Sem sem;
-  std::atomic<bool> passed;
+  SharedMemoryMap map(16);
+  std::atomic<bool> passed{false};
+  auto* sem = new (map.get_base()) Sem();
+
   // Spawn another thread spawns a child process that waits with a long
   // timeout.  We spawn the child process in a new thread because there's no
   // requirement that the child is executed in parallel until it calls execve
   // (which doesn't happen here).
   std::thread t([&]() {
-    ChildProcess p([&]() { exit(sem.wait(timeout_seconds * 1000)); });
+    ChildProcess p([&]() { exit(sem->wait(timeout_seconds * 1000)); });
     auto ret = p.wait_for_exit();
     assert(ret.exit_code == 1);
     passed = true;
   });
-  sem.wake();
+  sem->wake();
 
   auto future = std::async(std::launch::async, &std::thread::join, &t);
   // Join or time out after 5 seconds so the test fails if we infinite loop

@@ -7,6 +7,7 @@
  */
 namespace sandbox
 {
+  class SandboxedLibrary;
   /**
    * The kind of upcall.  This is used to dispatch the upcall to the correct
    * handler.
@@ -30,14 +31,14 @@ namespace sandbox
      */
     OpenAt,
     /**
-     * User-defined callback.  User for upcalls from the sandbox into Verona
-     * code and will itself be multiplexed.
+     * Total number of built-in upcall kinds.
      */
-    UserFunction,
+    BuiltInUpcallKindCount,
     /**
-     * Total number of upcall kinds.
+     * User-defined callback numbers start here.  User for upcalls from the
+     * sandbox into Verona code and will itself be multiplexed.
      */
-    UpcallKindCount
+    FirstUserFunction = BuiltInUpcallKindCount,
   };
 
   /**

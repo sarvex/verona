@@ -77,8 +77,8 @@ namespace sandbox::platform
       } timeout;
       timeout.timeout._clockid = CLOCK_MONOTONIC;
       timeout.timeout._flags = 0;
-      timeout.timeout._timeout = {
-        milliseconds / 1000, (milliseconds % 1000) * 1000000};
+      timeout.timeout._timeout = {milliseconds / 1000,
+                                  (milliseconds % 1000) * 1000000};
       int ret;
       do
       {

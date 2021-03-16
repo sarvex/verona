@@ -38,12 +38,17 @@ if (${ENABLE_CAPSICUM})
 	add_definitions(-DUSE_CAPSICUM)
 endif()
 
+
 add_library(sandbox SHARED ${LIBSANDBOX_SOURCES})
 add_executable(library_runner ${CHILD_SOURCES})
 
 find_package(Threads REQUIRED)
 target_link_libraries(library_runner Threads::Threads)
 target_link_libraries(sandbox Threads::Threads)
+
+# The library runner needs to export the upcall function and its system call
+# interposition functions to the loaded library.
+target_link_options(library_runner PRIVATE -Wl,-export-dynamic)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 	target_link_libraries(library_runner -ldl -lbsd -lseccomp)

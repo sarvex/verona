@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <array>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -165,10 +166,9 @@ namespace sandbox
             {
               break;
             }
-            reply = {
-              0,
-              reinterpret_cast<uintptr_t>(
-                s.memory_provider->pop_large_stack(large_size))};
+            reply = {0,
+                     reinterpret_cast<uintptr_t>(
+                       s.memory_provider->pop_large_stack(large_size))};
             break;
           }
           case MemoryProviderReserve:
@@ -178,10 +178,9 @@ namespace sandbox
             {
               break;
             }
-            reply = {
-              0,
-              reinterpret_cast<uintptr_t>(
-                s.memory_provider->template reserve<true>(large_size))};
+            reply = {0,
+                     reinterpret_cast<uintptr_t>(
+                       s.memory_provider->template reserve<true>(large_size))};
             break;
           }
           case ChunkMapSet:
@@ -404,10 +403,28 @@ namespace sandbox
     }
   };
 
+  /**
+   * Class that handles upcalls.  Each `SandboxedLibrary` holds a single one of
+   * these, its implementation is hidden from the public interface.
+   */
   class SandboxUpcallHandler
   {
+    /**
+     * The file paths exported to this sandbox.
+     */
     ExportedFileTree vfs;
+
+    /**
+     * Vector of upcall handlers.
+     */
+    std::vector<std::unique_ptr<UpcallHandlerBase>> handlers;
+
+    /**
+     * This is an implementation detail of `SandboxedLibrary`,
+     * `SandboxedLibrary` may call any of it.
+     */
     friend class SandboxedLibrary;
+
     /**
      * The handle to the socket that is used to pass file descriptors to the
      * sandboxed process.
@@ -415,10 +432,15 @@ namespace sandbox
     platform::SocketPair::Socket socket;
 
     /**
+     * Import the type used for upcall returns.
+     */
+    using Result = UpcallHandlerBase::Result;
+
+    /**
      * Convert a raw number from a system call return into either a file
      * descriptor or the error value.
      */
-    UpcallHandlerBase::Result return_fd(int fd)
+    Result return_fd(int fd)
     {
       if (fd >= 0)
       {
@@ -428,106 +450,180 @@ namespace sandbox
       return -errno;
     };
 
-    UpcallHandlerBase::Result return_int(int ret)
+    /**
+     * Helper for returning an integer value that comes from a system call
+     * return.  If the system call fails, returns negated `errno`.
+     */
+    Result return_int(int ret)
     {
       return ret >= 0 ? ret : -errno;
     };
 
     /**
-     * Copy the path out of the sandbox and canonicalise.
+     * Copy the path out of the sandbox.
      */
     unique_c_ptr<char> get_path(SandboxedLibrary& lib, uintptr_t inSandboxPath)
     {
-      auto path = lib.strdup_out(reinterpret_cast<char*>(inSandboxPath));
-      unique_c_ptr<char> canonical_path{realpath(path.get(), nullptr)};
-      return canonical_path;
+      return lib.strdup_out(reinterpret_cast<char*>(inSandboxPath));
     };
 
+    /**
+     * Turn a path into a canonical path.  The argument should be the return
+     * value from `get_path`.
+     */
+    unique_c_ptr<char> get_canonical_path(unique_c_ptr<char>& path)
+    {
+      unique_c_ptr<char> canonical_path{realpath(path.get(), nullptr)};
+      return canonical_path;
+    }
+
+    /**
+     * Check a pointer.  Returns `nullptr` if an object of type `T` at the
+     * given address is not fully contained within the sandbox.  Returns a
+     * pointer to the object cast to the correct type.
+     *
+     * This does *not* copy and so code should not read from any byte in the
+     * argument more than once or it will be subject to TOCTOU errors.
+     */
     template<typename T>
-    void check_pointer(SandboxedLibrary& lib, uintptr_t addr)
+    T* check_pointer(SandboxedLibrary& lib, uintptr_t addr)
     {
       T* ptr = reinterpret_cast<T*>(addr);
       if (lib.contains(ptr, sizeof(T)))
       {
         return ptr;
       }
+      return nullptr;
     }
 
+    /**
+     * Handle an `open` upcall by reading the file from the exported file tree.
+     */
+    Result handle_open(SandboxedLibrary& lib, UpcallArgs::Open& args)
+    {
+      auto path = get_path(lib, args.path);
+      auto canonical_path = get_canonical_path(path);
+      if (!path)
+      {
+        return return_int(-EINVAL);
+      }
+      auto allowed = vfs.lookup_file(path.get());
+      if (!allowed.has_value())
+      {
+        return return_int(-ENOENT);
+      }
+      auto fd = allowed.value().first;
+      auto& path_tail = allowed.value().second;
+      if (path_tail != std::string())
+      {
+        fd = ::openat(fd, path_tail.c_str(), args.flags, args.mode);
+      }
+      else
+      {
+        // FIXME: Ugly hack to work around the lack of a non-owning version
+        // of `Handle`
+        fd = ::dup(fd);
+      }
+      return return_fd(fd);
+    }
+
+    /**
+     * Handle a `stat` upcall by forwarding to a real `fstat` call if the
+     * exported file tree provides a file descriptor corresponding to this
+     * path.
+     */
+    Result handle_stat(SandboxedLibrary& lib, UpcallArgs::Stat& args)
+    {
+      uintptr_t ret = -EINVAL;
+      struct stat* sb = check_pointer<struct stat>(lib, args.statbuf);
+      auto path = get_path(lib, args.path);
+      auto allowed = vfs.lookup_file(path.get());
+      if (allowed.has_value() && (sb != nullptr))
+      {
+        auto fd = allowed.value().first;
+        auto& path_tail = allowed.value().second;
+        if (path_tail == std::string())
+        {
+          ret = fstat(fd, sb);
+        }
+        else
+        {
+          ret = fstatat(fd, path_tail.c_str(), sb, 0);
+        }
+      }
+      return return_int(ret);
+    }
+
+    /**
+     * Helper, enlarges the handlers array, filling it in with empty handlers.
+     */
+    void enlarge_handlers(size_t size)
+    {
+      if (size >= handlers.size())
+      {
+        size_t oldsize = handlers.size();
+        handlers.resize(size);
+        for (size_t i = oldsize; i < size; i++)
+        {
+          handlers[i] = std::make_unique<UpcallHandlerBase>();
+        }
+      }
+    }
+
+    /**
+     * Register a handler for an upcall, with the specific index.  Note that,
+     * although `k` is an `UpcallKind`, this will be a value after the last
+     * statically defined upcall kind for any user-provided callbacks.
+     */
+    template<typename Args>
+    void register_handler(
+      UpcallKind k,
+      Result (SandboxUpcallHandler::*handler)(SandboxedLibrary&, Args&))
+    {
+      enlarge_handlers(k + 1);
+      handlers[k] = make_upcall_handler<Args>(
+        std::bind(handler, this, std::placeholders::_1, std::placeholders::_2));
+    }
+
+    /**
+     * Handle a request.
+     */
     void handle(SandboxedLibrary& lib)
     {
       UpcallRequest req;
       platform::Handle in_fd;
+      // FIXME: This should not block, but it can if the sandbox doesn't write
+      // anything into the socket.
       socket.receive(&req, sizeof(req), in_fd);
-      fprintf(stderr, "Upcall %d!\n", req.kind);
-
-      auto openfn = make_upcall_handler<UpcallArgs::Open>(
-        [&](SandboxedLibrary& lib, UpcallArgs::Open& args) {
-          auto path = get_path(lib, args.path);
-          auto allowed = vfs.lookup_file(path.get());
-          if (!allowed.has_value())
-          {
-            fprintf(stderr, "File not authorised!\n");
-            return return_int(-ENOENT);
-          }
-          auto fd = allowed.value().first;
-          auto& path_tail = allowed.value().second;
-          if (path_tail != std::string())
-          {
-            fd = openat(fd, path_tail.c_str(), args.flags, args.mode);
-          }
-          else
-          {
-            // FIXME: Ugly hack to work around the lack of a non-owning version
-            // of `Handle`
-            fd = dup(fd);
-          }
-          fprintf(stderr, "Open in parent returned %d\n", fd);
-          return return_fd(fd);
-        });
-
-      auto statfn = make_upcall_handler<UpcallArgs::Stat>(
-        [&](SandboxedLibrary& lib, UpcallArgs::Stat& args) {
-          uintptr_t ret = -EINVAL;
-          struct stat* sb = reinterpret_cast<struct stat*>(args.statbuf);
-          auto path = get_path(lib, args.path);
-          auto allowed = vfs.lookup_file(path.get());
-          if (allowed.has_value())
-          {
-            auto fd = allowed.value().first;
-            auto& path_tail = allowed.value().second;
-            if (path_tail == std::string())
-            {
-              ret = fstat(fd, sb);
-            }
-            else
-            {
-              ret = fstatat(fd, path_tail.c_str(), sb, 0);
-            }
-          }
-          return return_int(ret);
-        });
 
       UpcallHandlerBase::Result ret;
-      switch (req.kind)
+      if (req.kind < handlers.size())
       {
-        case UpcallKind::Open:
-          fprintf(stderr, "openfn\n");
-          ret = openfn->invoke(lib, req);
-          break;
-        case UpcallKind::Stat:
-          fprintf(stderr, "statfn\n");
-          ret = statfn->invoke(lib, req);
-          break;
-        default:
-        {
-        }
+        ret = handlers[req.kind]->invoke(lib, req);
       }
-
-      fprintf(stderr, "Upcall return\n");
       socket.send(&ret.integer, sizeof(ret.integer), ret.handle);
     }
 
+    /**
+     * The next upcall number to use.
+     */
+    int next_upcall_number = UpcallKind::FirstUserFunction;
+
+    /**
+     * Register an upcall for the next available user-defined callback number.
+     */
+    int register_callback(std::unique_ptr<UpcallHandlerBase>&& upcall)
+    {
+      int n = next_upcall_number++;
+      enlarge_handlers(n + 1);
+      handlers[n] = std::move(upcall);
+      return n;
+    }
+
   public:
+    /**
+     * Constructor.  Set up the default exported directories.
+     */
     SandboxUpcallHandler()
     {
       for (auto libdir : libdirs)
@@ -544,8 +640,22 @@ namespace sandbox
       {
         vfs.add_file(ldsocache, platform::Handle(fd));
       }
+      handlers.reserve(UpcallKind::BuiltInUpcallKindCount);
+      register_handler(UpcallKind::Open, &SandboxUpcallHandler::handle_open);
+      register_handler(UpcallKind::Stat, &SandboxUpcallHandler::handle_stat);
     };
   };
+
+  ExportedFileTree& SandboxedLibrary::filetree()
+  {
+    return upcall_handler->vfs;
+  }
+
+  int SandboxedLibrary::register_callback(
+    std::unique_ptr<UpcallHandlerBase>&& callback)
+  {
+    return upcall_handler->register_callback(std::move(callback));
+  }
 
   SandboxedLibrary::~SandboxedLibrary()
   {
@@ -760,7 +870,6 @@ namespace sandbox
           throw std::runtime_error("Sandboxed library terminated abnormally");
         }
       }
-      fprintf(stderr, "Parent woke up!\n");
       // If we were woken up for an upcall, then handle it, wake up the
       // child, and then continue waiting.
       // Note that we may be called recursively by the upcall handler to
@@ -770,11 +879,11 @@ namespace sandbox
       {
         upcall_handler->handle(*this);
         shared_mem->token.upcall_depth--;
+        shared_mem->token.is_child_executing = true;
         shared_mem->token.child.wake();
         handled_upcall = true;
       }
     } while (handled_upcall);
-    fprintf(stderr, "Returning from message send\n");
   }
   bool SandboxedLibrary::has_child_exited()
   {

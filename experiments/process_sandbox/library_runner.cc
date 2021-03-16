@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "child_malloc.h"
+#include "helpers.h"
 #include "host_service_calls.h"
 #include "platform/platform.h"
 #include "privilege_elevation_upcalls.h"
@@ -13,6 +14,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -262,19 +264,23 @@ namespace
   /**
    * The run loop.  Takes the public interface of this library (effectively,
    * the library's vtable) as an argument.  Exits when the upcall depth changes
-   * when waiting
+   * after executing the helper function.  This provides a nested runloop
+   * abstraction similar to OpenStep's modal runloop. Each recursion depth in
+   * an upcall has its own runloop that handles recursive invocations from the
+   * parent in response to the upcall.
    */
   void runloop(int upcall_depth = 0)
   {
-	  int new_depth;
+    int new_depth;
     do
     {
-      while (!shared->token.child.wait(INT_MAX))
-      {}
-      if (shared->should_exit)
+      do
       {
-        exit(0);
-      }
+        if (shared->should_exit)
+        {
+          exit(0);
+        }
+      } while (!shared->token.child.wait(INT_MAX));
       assert(shared->token.is_child_executing);
       int idx = shared->function_index;
       void* buf = shared->msg_buffer;
@@ -289,9 +295,16 @@ namespace
         // FIXME: Report error in some useful way.
         printf("Exception!\n");
       }
-	  new_depth = shared->token.upcall_depth;
-      shared->token.is_child_executing = false;
-      shared->token.parent.wake();
+      new_depth = shared->token.upcall_depth;
+      // Wake up the parent if it's expecting a wakeup for this upcall depth.
+      // The `upcall` function has a wake but not a wait because it is using
+      // the `wait` in this function, we need to ensure that we don't unbalance
+      // the wakes and waits.
+      if (new_depth == upcall_depth)
+      {
+        shared->token.is_child_executing = false;
+        shared->token.parent.wake();
+      }
     } while (new_depth == upcall_depth);
   }
 
@@ -370,6 +383,7 @@ namespace
 
   using sandbox::platform::Handle;
   using Socket = sandbox::platform::SocketPair::Socket;
+
   /**
    * The socket that is used for upcalls to the parent process.
    */
@@ -395,10 +409,9 @@ namespace
     out_fd.take();
     int depth = ++shared->token.upcall_depth;
     (void)depth;
+    shared->token.is_child_executing = false;
     shared->token.parent.wake();
-    while (!shared->token.child.wait(INT_MAX))
-    {}
-    // runloop(depth);
+    runloop(depth);
     Handle in_fd;
     UpcallResponse response;
     upcallSocket.receive(&response, sizeof(response), in_fd);
@@ -419,37 +432,28 @@ namespace
     return upcall(k, data, sizeof(T), fd);
   }
 
-int upcall_stat(const char* pathname, struct stat* statbuf)
-{
-  auto args = std::make_unique<sandbox::UpcallArgs::Stat>();
-  unique_c_ptr<char> copy;
-  if ((pathname < shared_memory_start) || (pathname >= shared_memory_end))
+  /**
+   * Emulate the `stat` system call by performing an upcall to the parent.
+   */
+  int upcall_stat(const char* pathname, struct stat* statbuf)
   {
-    copy.reset(strdup(pathname));
-    pathname = copy.get();
+    auto args = std::make_unique<sandbox::UpcallArgs::Stat>();
+    unique_c_ptr<char> copy;
+    if ((pathname < shared_memory_start) || (pathname >= shared_memory_end))
+    {
+      copy.reset(strdup(pathname));
+      pathname = copy.get();
+    }
+    args->path = reinterpret_cast<uintptr_t>(pathname);
+    args->statbuf = reinterpret_cast<uintptr_t>(statbuf);
+    auto ret = upcall(sandbox::UpcallKind::Stat, args.get());
+    return static_cast<int>(ret.first);
   }
-  args->path = reinterpret_cast<uintptr_t>(pathname);
-  args->statbuf = reinterpret_cast<uintptr_t>(statbuf);
-  auto ret = upcall(sandbox::UpcallKind::Stat, args.get());
-  return static_cast<int>(ret.first);
-}
 
-int upcall_openat(int dirfd, const char* pathname, int flags, mode_t mode)
-{
-  (void)dirfd;
-  char buf[128];
-  pid_t pid = getpid();
-  sprintf(buf, "/proc/%d/fd/%%d", (int)pid);
-  int fd = -1;
-  if (sscanf(pathname, buf, &fd) == 1)
-  {
-    return dup(fd);
-  }
-  if (pathname == nullptr)
-  {
-    return -EINVAL;
-  }
-  if (pathname[0] == '/')
+  /**
+   * Emulate the `open` system call by performing an upcall to the parent.
+   */
+  int upcall_open(const char* pathname, int flags, mode_t mode)
   {
     auto args = std::make_unique<sandbox::UpcallArgs::Open>();
     unique_c_ptr<char> copy;
@@ -469,17 +473,143 @@ int upcall_openat(int dirfd, const char* pathname, int flags, mode_t mode)
     }
     return result;
   }
-  return -EINVAL;
+
+  /**
+   * The upcall functions use the Linux convention for system call returns:
+   * non-negative numbers indicate success, negative numbers indicate valuesw
+   * that should be stored in `errno`.  The `syscall_return` function unwraps
+   * this into the return value from the POSIX function, setting `errno` if
+   * appropriate.
+   */
+  int syscall_return(int x)
+  {
+    if (x < 0)
+    {
+      errno = -x;
+      return -1;
+    }
+    return x;
+  }
+
+  /**
+   * Emulate the `openat` system call by performing an upcall to the parent.
+   */
+  int upcall_openat(int dirfd, const char* pathname, int flags, mode_t mode)
+  {
+    (void)dirfd;
+#ifdef __linux__
+    // Special case for Linux's /proc/{pid}/fd filesystem.  This is necessary
+    // for fdlopen on Linux.
+    char buf[128];
+    pid_t pid = getpid();
+    sprintf(buf, "/proc/%d/fd/%%d", (int)pid);
+    int fd = -1;
+    if (sscanf(pathname, buf, &fd) == 1)
+    {
+      return dup(fd);
+    }
+#endif
+    if (pathname == nullptr)
+    {
+      return -EINVAL;
+    }
+    if (pathname[0] == '/')
+    {
+      return upcall_open(pathname, flags, mode);
+    }
+    // TODO: Perform an upcall for the openat emulation.
+    return -EINVAL;
+  }
+
+  using SyscallFrame = sandbox::platform::SyscallFrame;
+
+  /**
+   * Helper template that extracts arguments from a system call register dump
+   * passed into a signal handler.  This can then be passed to `std::apply` to
+   * pass the arguments to a function.
+   */
+  template<typename Tuple, int Arg = std::tuple_size_v<Tuple> - 1>
+  __attribute__((always_inline)) void extract_args(Tuple& args, SyscallFrame& c)
+  {
+    get<Arg>(args) = c.get_arg<
+      Arg,
+      std::tuple_element_t<Arg, std::remove_reference_t<Tuple>>>();
+    if constexpr (Arg > 0)
+    {
+      extract_args<Tuple, Arg - 1>(args, c);
+    }
+  }
+
+  /**
+   * Signal handler function.  For system calls that are emulated after a trap,
+   * this extracts the arguments from the trap frame, calls the correct upcall
+   * function, and then injects the return address into the syscall frame.
+   */
+  void emulate(int, siginfo_t* info, ucontext_t* ctx)
+  {
+    SyscallFrame c(*info, *ctx);
+    if (c.is_sandbox_policy_violation())
+    {
+      int syscall = c.get_syscall_number();
+      auto call = [&](auto&& fn) {
+        typename sandbox::internal::signature<decltype(fn)>::argument_type args;
+        extract_args(args, c);
+        return std::apply(fn, args);
+      };
+      auto syscall_upcall = [&](int number, auto&& fn) {
+        if ((number != -1) && (number == syscall))
+        {
+          uintptr_t result = call(fn);
+          if (result < 0)
+          {
+            c.set_error_return(-result);
+          }
+          else
+          {
+            c.set_success_return(result);
+          }
+          return;
+        }
+      };
+      syscall_upcall(SyscallFrame::Open, upcall_open);
+      syscall_upcall(SyscallFrame::OpenAt, upcall_openat);
+      syscall_upcall(SyscallFrame::Stat, upcall_stat);
+    }
+  }
+
 }
 
+/**
+ * POSIX `open` function, performs an upcall to the host rather than a system
+ * call.
+ */
+extern "C" int open(const char* pathname, int flags, ...)
+{
+  mode_t mode = 0;
+  if ((flags & O_CREAT) == O_CREAT)
+  {
+    va_list ap;
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+  }
+  return syscall_return(upcall_open(pathname, flags, mode));
 }
 
 #ifndef USE_CAPSICUM
+/**
+ * POSIX `openat` function, performs an upcall to the host rather than a system
+ * call.  In a Capsicum world, this is safe to allow the untrusted process to
+ * do directly, so we don't bother interposing here.
+ *
+ * TODO: We should still interpose on this with Capsicum to handle things like
+ * `openat(-100, "some/path", O_WHATEVER)`
+ */
 extern "C" int openat(int dirfd, const char* pathname, int flags, ...)
 {
   va_list ap;
   va_start(ap, flags);
-  mode_t mode = va_arg(ap, mode_t);
+  mode_t mode = va_arg(ap, int);
   va_end(ap);
   int ret = upcall_openat(dirfd, pathname, flags, mode);
   if (ret < 0)
@@ -491,50 +621,38 @@ extern "C" int openat(int dirfd, const char* pathname, int flags, ...)
 }
 #endif
 
-void emulate(int signo, siginfo_t* info, ucontext_t* ctx)
+/**
+ * Exported function to allow the loaded code to invoke a callback to the
+ * parent.
+ */
+int sandbox::invoke_user_callback(int idx, void* data, size_t size, int fd)
 {
-#ifdef __linux__
-  long long arg0 = ctx->uc_mcontext.gregs[REG_RDI];
-  long long arg1 = ctx->uc_mcontext.gregs[REG_RSI];
-  long long arg2 = ctx->uc_mcontext.gregs[REG_RDX];
-  long long arg3 = ctx->uc_mcontext.gregs[REG_R10];
-  if (info->si_syscall == 4)
+  unique_c_ptr<void> copy;
+  if (
+    (data < shared_memory_start) ||
+    ((static_cast<char*>(data) + size) >= shared_memory_end))
   {
-    ctx->uc_mcontext.gregs[REG_RAX] =
-      (greg_t)upcall_stat((const char*)arg0, (struct stat*)arg1);
-    // Advance the instruction pointer after the syscall instruction
-    ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr;
+    copy.reset(malloc(size));
+    memcpy(copy.get(), data, size);
+    data = copy.get();
   }
-  else if (info->si_syscall == 257)
+  auto ret = upcall(static_cast<sandbox::UpcallKind>(idx), data, size, fd);
+  int result = static_cast<int>(ret.first);
+  if (ret.second.is_valid())
   {
-    ctx->uc_mcontext.gregs[REG_RAX] =
-      (greg_t)upcall_openat((int)arg0, (const char*)arg1, (int)arg2, (mode_t)arg3);
-    // Advance the instruction pointer after the syscall instruction
-    ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr;
+    result = ret.second.take();
   }
-  else
-  {
-    fprintf(
-      stderr,
-      "Signal: %d\nFaulting instruction: %p\nSyscall: %d, %p\n",
-      signo,
-      info->si_call_addr,
-      (int)info->si_syscall,
-      ctx);
-  }
-#endif
+  return result;
 }
 
 int main()
 {
   sandbox::platform::Sandbox::apply_sandboxing_policy_postexec();
-#ifdef __linux__
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_flags = SA_SIGINFO;
   sa.sa_sigaction = (void (*)(int, siginfo_t*, void*))emulate;
-  sigaction(SIGSYS, &sa, nullptr);
-#endif
+  sigaction(SyscallFrame::syscall_signal, &sa, nullptr);
   // Close the shared memory region file descriptor before we call untrusted
   // code.
   close(SharedMemRegion);

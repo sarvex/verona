@@ -26,7 +26,7 @@ int main(void)
   // But we did get the data.
   assert(i == 42);
   i = 0x12345678;
-  // Send the receive 
+  // Send the receive end of a socket pair.
   h = std::move(sp2.second);
   assert(sp.first.send(&i, sizeof(i), h));
   assert(sp.second.receive(&i, sizeof(i), h));

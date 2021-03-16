@@ -257,45 +257,6 @@ namespace sandbox
    */
   namespace internal
   {
-    /**
-     * Template that deduces the return type and argument types for a function
-     * `signature<void(int, float)>::return_type` is `void` and
-     * `signature<void(int, float)>::argument_type` is `std::tuple<int, float>`.
-     */
-    template<typename T>
-    struct signature;
-    /**
-     * Specialisation for when the callee is a value.
-     */
-    template<typename R, typename... Args>
-    struct signature<R(Args...)>
-    {
-      /**
-       * The return type of the function whose type is being extracted.
-       */
-      using return_type = R;
-      /**
-       * A tuple type containing all of the argument types of the function
-       * whose type is being extracted.
-       */
-      using argument_type = std::tuple<Args...>;
-    };
-    /**
-     * Specification for when the callee is a reference.
-     */
-    template<typename R, typename... Args>
-    struct signature<R (&)(Args...)>
-    {
-      /**
-       * The return type of the function whose type is being extracted.
-       */
-      using return_type = R;
-      /**
-       * A tuple type containing all of the argument types of the function
-       * whose type is being extracted.
-       */
-      using argument_type = std::tuple<Args...>;
-    };
 
     /**
      * Given the types deduced by `signature`, construct the type of a

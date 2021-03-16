@@ -22,7 +22,9 @@ namespace sandbox
       void restrict_file_descriptors(const T&, const U&)
       {}
 
-      void apply_sandboxing_policy() {}
+      static void apply_sandboxing_policy_postexec() {}
+
+      void apply_sandboxing_policy_preexec() {}
     };
 
     using Sandbox =

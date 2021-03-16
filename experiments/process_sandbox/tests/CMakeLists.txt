@@ -12,6 +12,9 @@ set(UNIT_TESTS
 set(SANDBOX_TESTS
 	basic
 	crash
+	fake-open
+	upcall-basic
+	upcall-recursive
 	zlib
 	)
 

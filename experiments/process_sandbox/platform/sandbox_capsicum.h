@@ -5,6 +5,7 @@
 #  include "../sandbox_fd_numbers.h"
 
 #  include <sys/capsicum.h>
+#  include <sys/procctl.h>
 namespace sandbox
 {
   namespace platform
@@ -55,10 +56,15 @@ namespace sandbox
        * parent or via calls such as `openat` that take a sufficiently
        * authorized file descriptor.
        */
-      void apply_sandboxing_policy()
+      static void apply_sandboxing_policy_postexec()
       {
+        fprintf(stderr, "Entering capability mode!\n");
+        int arg = PROC_TRAPCAP_CTL_ENABLE;
+        int ret = procctl(P_PID, getpid(), PROC_TRAPCAP_CTL, &arg);
+        assert(ret == 0);
         cap_enter();
       }
+      void apply_sandboxing_policy_preexec() {}
     };
   }
 }

@@ -92,7 +92,7 @@ namespace sandbox::platform
     {
       ctx.uc_mcontext.gregs[REG_RAX] = static_cast<greg_t>(r);
       // Advance the PC past the syscall instruction.
-      ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr
+      ctx.uc_mcontext.gregs[REG_RIP] = (greg_t)info.si_call_addr;
     }
 
     /**
@@ -104,9 +104,9 @@ namespace sandbox::platform
     void set_error_return(int e)
     {
       // Linux uses negated values to indicate errno returns.
-      ctx.uc_mcontext.gregs[REG_RAX] = 0 - static_cast<greg_t>(r);
+      ctx.uc_mcontext.gregs[REG_RAX] = 0 - static_cast<greg_t>(e);
       // Advance the PC past the syscall instruction.
-      ctx->uc_mcontext.gregs[REG_RIP] = (greg_t)info->si_call_addr
+      ctx.uc_mcontext.gregs[REG_RIP] = (greg_t)info.si_call_addr;
     }
 
     /**
@@ -122,7 +122,9 @@ namespace sandbox::platform
      */
     bool is_sandbox_policy_violation()
     {
-      return info.si_code == SYS_SECCOMP;
+      // This ought to be SYS_SECCOMP, but including the header that defines it
+      // causes conflicts with other Linux headers.
+      return info.si_code == 1;
     }
   };
 

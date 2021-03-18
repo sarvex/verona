@@ -1,7 +1,9 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
+#include "helpers.h"
+#include "platform/platform.h"
+
 #include <future>
-#include <platform/platform.h>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -19,7 +21,7 @@ void test_sem()
   std::atomic<bool> passed;
   // Check that we time out without acquiring the semaphore.
   bool acquired = sem.wait(100);
-  assert(!acquired);
+  SANDBOX_INVARIANT(!acquired, "Failed to acquire semaphore");
   // Spawn another thread that waits with a long timeout.
   std::thread t([&]() {
     sem.wait(timeout_seconds * 1000);
@@ -29,10 +31,11 @@ void test_sem()
 
   auto future = std::async(std::launch::async, &std::thread::join, &t);
   // Join or time out after 5 seconds so the test fails if we infinite loop
-  assert(
+  SANDBOX_INVARIANT(
     future.wait_for(std::chrono::seconds(timeout_seconds)) !=
-    std::future_status::timeout);
-  assert(passed);
+      std::future_status::timeout,
+    "Test timed out");
+  SANDBOX_INVARIANT(passed, "Wait never woke up");
 }
 
 int main(void)

@@ -1,5 +1,7 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
+#include "helpers.h"
+
 #include <future>
 #include <platform/platform.h>
 #include <thread>
@@ -26,7 +28,7 @@ void test_poller()
       handle_t h;
       bool eof;
       bool ret = poller.poll(h, eof);
-      assert(ret);
+      SANDBOX_INVARIANT(ret, "Poller returned failure");
       int val = -1;
       if (read(h, &val, sizeof(val)) > 0)
       {
@@ -52,19 +54,29 @@ void test_poller()
     auto timeout = start + std::chrono::seconds(timeout_seconds);
     while (read_fd_count < fd_count)
     {
-      assert(std::chrono::steady_clock::now() < timeout);
+      SANDBOX_INVARIANT(
+        std::chrono::steady_clock::now() < timeout, "Test timed out");
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
   auto future = std::async(std::launch::async, &std::thread::join, &t);
   // Join or time out after 5 seconds so the test fails if we infinite loop
-  assert(
+  SANDBOX_INVARIANT(
     future.wait_for(std::chrono::seconds(timeout_seconds)) !=
-    std::future_status::timeout);
-  assert(closed_fds == fd_count);
+      std::future_status::timeout,
+    "Test timed out");
+  SANDBOX_INVARIANT(
+    closed_fds == fd_count,
+    "{} fds were closed, {} expected",
+    closed_fds,
+    fd_count);
   for (int i = 0; i < fd_count; i++)
   {
-    assert(read_fds.count(i) == 1);
+    SANDBOX_INVARIANT(
+      read_fds.count(i) == 1,
+      "fd {} was read {} times, once was expected",
+      i,
+      read_fds.count(i));
   }
 }
 

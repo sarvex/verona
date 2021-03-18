@@ -46,6 +46,8 @@ find_package(Threads REQUIRED)
 target_link_libraries(library_runner Threads::Threads)
 target_link_libraries(sandbox Threads::Threads)
 
+target_link_libraries(library_runner fmt)
+target_link_libraries(sandbox fmt)
 # The library runner needs to export the upcall function and its system call
 # interposition functions to the loaded library.
 target_link_options(library_runner PRIVATE -Wl,-export-dynamic)

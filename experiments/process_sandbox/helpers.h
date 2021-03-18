@@ -4,8 +4,139 @@
 #pragma once
 #include <memory>
 
+#if __has_include(<source_location>)
+#  include <source_location>
 namespace sandbox
 {
+  using source_location = std::source_location;
+}
+#elif __has_include(<experimental/source_location>)
+#  include <experimental/source_location>
+namespace sandbox
+{
+  using source_location = std::experimental::source_location;
+}
+#else
+// If we don't have a vaguely recent standard library then we don't get useful
+// source locations.
+namespace sandbox
+{
+  struct source_location
+  {
+    std::uint_least32_t line()
+    {
+      return 0;
+    }
+    const char* file_name()
+    {
+      return "{unknown file}";
+    }
+    const char* function_name()
+    {
+      return "{unknown function}";
+    }
+    static source_location current()
+    {
+      return {};
+    }
+  };
+}
+#endif
+#include <fmt/format.h>
+#include <pal/pal.h>
+
+namespace sandbox
+{
+  /**
+   * Handler for invariant failures.  Not inlined, this is always a slow
+   * path.  This should be called only by `invariant`.
+   */
+  __attribute__((noinline)) void invariant_fail(
+    std::string_view msg, fmt::format_args args, source_location sl)
+  {
+    std::string user_msg = fmt::vformat(msg, args);
+    std::string final_msg = fmt::format(
+      "{}:{} in {}: {}\n",
+      sl.file_name(),
+      sl.line(),
+      sl.function_name(),
+      user_msg);
+    snmalloc::Pal::error(final_msg.c_str());
+  }
+
+  enum SandboxDebugOption
+  {
+    DebugOnly,
+    DebugAndRelease,
+    ReleaseOnly
+  };
+
+  /**
+   * Invariant.  If `cond` is false, prints the message defined by `msg` and
+   * the (optional) format-string arguments and aborts.  The caller should
+   * never specify the `sl` parameter.
+   *
+   * Implementation detail: This receives the source location via the default
+   * parameter and so has to put that after everything else, but C++ does not
+   * allow arguments from a parameter pack in the middle of the argument list
+   * and so we need to pack those into a tuple.
+   */
+  template<
+    SandboxDebugOption Enable = DebugAndRelease,
+    typename Msg,
+    typename... Args>
+  __attribute__((always_inline)) void invariant(
+    bool cond,
+    Msg msg = "Assertion failure",
+    std::tuple<Args...> fmt_args = {},
+    source_location sl = source_location::current())
+  {
+    constexpr bool isRelease =
+#ifdef NDEBUG
+      true
+#else
+      false
+#endif
+      ;
+
+    constexpr bool isEnabled = ((Enable == DebugOnly) && !isRelease) ||
+      ((Enable == ReleaseOnly) && isRelease) || (Enable == DebugAndRelease);
+    if constexpr (isEnabled)
+    {
+      if (!cond)
+      {
+		  // TODO: With libfmt >= 7, this can do compile-time argument
+		  // checking.
+        invariant_fail(
+          msg,
+          std::apply(
+            fmt::make_format_args<fmt::format_context, Args...>, fmt_args),
+          sl);
+      }
+    }
+  }
+
+  /**
+   * Helper macro for calling `invariant` and constructing the format-string
+   * arguments list.  Enabled in any build mode.
+   */
+#define SANDBOX_INVARIANT(cond, msg, ...) \
+  sandbox::invariant(cond, msg, std::make_tuple(__VA_ARGS__))
+
+  /**
+   * Helper macro for calling `invariant` and constructing the format-string
+   * arguments list.  Enabled only in debug builds.
+   */
+#define SANDBOX_DEBUG_INVARIANT(cond, msg, ...) \
+  sandbox::invariant<DebugOnly>(cond, msg, std::make_tuple(__VA_ARGS__))
+
+  /**
+   * Helper macro for calling `invariant` and constructing the format-string
+   * arguments list.  Enabled only in release builds.
+   */
+#define SANDBOX_RELEASE_INVARIANT(cond, msg, ...) \
+  sandbox::invariant<ReleaseOnly>(cond, msg, std::make_tuple(__VA_ARGS__))
+
   /**
    * Helper that constructs a deleter from a C function, so that it can
    * be used with `std::unique_ptr`.

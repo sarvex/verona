@@ -1,6 +1,8 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
-#include <platform/platform.h>
+#include "helpers.h"
+#include "platform/platform.h"
+
 #include <thread>
 
 using namespace sandbox::platform;
@@ -13,11 +15,13 @@ void test_child()
     exit(2);
   });
   auto ec = cp.wait_for_exit();
-  assert(ec.has_exited);
-  assert(ec.exit_code == 2);
+  SANDBOX_INVARIANT(ec.has_exited, "Child has not exited");
+  SANDBOX_INVARIANT(
+    ec.exit_code == 2, "Error code is {}, expected 2", ec.exit_code);
   auto ec2 = cp.exit_status();
-  assert(ec2.has_exited);
-  assert(ec2.exit_code == 2);
+  SANDBOX_INVARIANT(ec2.has_exited, "Child has not exited");
+  SANDBOX_INVARIANT(
+    ec2.exit_code == 2, "Error code is {}, expected 2", ec.exit_code);
 }
 
 using Fallback =

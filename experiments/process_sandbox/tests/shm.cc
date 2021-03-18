@@ -1,6 +1,7 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
-#include <platform/platform.h>
+#include "helpers.h"
+#include "platform/platform.h"
 
 using namespace sandbox::platform;
 
@@ -15,15 +16,25 @@ void test_map()
   Map m(log2size);
   // Is the base correctly aligned?
   uintptr_t base = reinterpret_cast<uintptr_t>(m.get_base());
-  assert((base & address_mask) == 0);
+  SANDBOX_INVARIANT(
+    (base & address_mask) == 0,
+    "Base address {} is insufficiently aligned",
+    base);
   // Is the size what we asked for?
-  assert(m.get_size() == size);
+  SANDBOX_INVARIANT(
+    m.get_size() == size, "Mapped object is {} bytes", m.get_size());
   // Can we at least write to and read from the first and last byte?
   auto cp = static_cast<volatile char*>(m.get_base());
   cp[0] = 12;
   cp[size - 1] = 42;
-  assert(cp[0] == 12);
-  assert(cp[size - 1] == 42);
+  SANDBOX_INVARIANT(
+    cp[0] == 12,
+    "Value 12 stored at the start of the map, read back as {:d}",
+    cp[0]);
+  SANDBOX_INVARIANT(
+    cp[size - 1] == 42,
+    "Value 42 stored at the end of the map, read back as {:d}",
+    cp[size - 1]);
 }
 
 using FallbackMap =

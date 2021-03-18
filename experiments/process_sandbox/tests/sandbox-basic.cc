@@ -27,7 +27,7 @@ struct AddSandbox
 void test_sum(AddSandbox& sb, int a, int b)
 {
   int ret = sb.sum(a, b);
-  assert(ret == (a + b));
+  SANDBOX_INVARIANT(ret == (a + b), "{} + {} == {}", a, b, ret);
 }
 
 int main()

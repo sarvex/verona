@@ -3,7 +3,6 @@
 
 #pragma once
 #include <aal/aal.h>
-#include <assert.h>
 #include <ds/bits.h>
 #include <pal/pal.h>
 #include <stdint.h>

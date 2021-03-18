@@ -26,7 +26,7 @@ struct UpcallSandbox
 
 UpcallHandlerBase::Result upcall(SandboxedLibrary&, int val)
 {
-  assert(val = 12);
+  SANDBOX_INVARIANT(val == 12, "Upcall argument is {}, expected 12", val);
   return 42;
 }
 
@@ -38,11 +38,11 @@ int main()
   try
   {
     int ret = sandbox.call_upcall(upcall_number);
-    assert(ret == 42);
+    SANDBOX_INVARIANT(ret == 42, "Sandbox returned {}, expected 42", ret);
   }
   catch (...)
   {
-    assert(0);
+    SANDBOX_INVARIANT(0, "Exception thrown when invoking sandbox");
   }
   return 0;
 }

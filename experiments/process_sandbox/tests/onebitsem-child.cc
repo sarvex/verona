@@ -1,5 +1,7 @@
 // Copyright Microsoft and Project Verona Contributors.
 // SPDX-License-Identifier: MIT
+#include "helpers.h"
+
 #include <future>
 #include <platform/platform.h>
 #include <thread>
@@ -26,17 +28,19 @@ void test_sem()
   std::thread t([&]() {
     ChildProcess p([&]() { exit(sem->wait(timeout_seconds * 1000)); });
     auto ret = p.wait_for_exit();
-    assert(ret.exit_code == 1);
+    SANDBOX_INVARIANT(
+      ret.exit_code == 1, "Exit code is {}, expected 1", ret.exit_code);
     passed = true;
   });
   sem->wake();
 
   auto future = std::async(std::launch::async, &std::thread::join, &t);
   // Join or time out after 5 seconds so the test fails if we infinite loop
-  assert(
+  SANDBOX_INVARIANT(
     future.wait_for(std::chrono::seconds(timeout_seconds)) !=
-    std::future_status::timeout);
-  assert(passed);
+      std::future_status::timeout,
+    "Test timed out");
+  SANDBOX_INVARIANT(passed, "Wake did not occur");
 }
 
 int main(void)

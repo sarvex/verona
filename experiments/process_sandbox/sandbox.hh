@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <assert.h>
 #include <memory>
 #include <string.h>
 #include <tuple>
@@ -376,7 +375,6 @@ namespace sandbox
         return nullptr;
       }
       auto maxlen = static_cast<char*>(memory_provider.top_address()) - str;
-      assert(maxlen > 0);
       auto len = strnlen(str, maxlen);
       if (len == static_cast<size_t>(maxlen))
       {

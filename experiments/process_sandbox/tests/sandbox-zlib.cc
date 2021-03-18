@@ -82,7 +82,8 @@ void test(ZLib& sandbox, const char* file, std::vector<char>& result)
     zs->zalloc = Z_NULL;
     zs->zfree = Z_NULL;
     int ret = sandbox.deflateInit(zs, Z_DEFAULT_COMPRESSION);
-    assert(ret == Z_OK);
+    SANDBOX_INVARIANT(
+      ret == Z_OK, "deflateInit returned {}, expected {}", ret, Z_OK);
 
     zs->next_out = reinterpret_cast<Bytef*>(out);
     zs->avail_out = out_buffer_size;
@@ -90,7 +91,9 @@ void test(ZLib& sandbox, const char* file, std::vector<char>& result)
     while ((zs->avail_in = read(fd, in, in_buffer_size)))
     {
       zs->next_in = reinterpret_cast<Bytef*>(in);
-      assert(sandbox.deflate(zs, Z_PARTIAL_FLUSH) != Z_STREAM_ERROR);
+      SANDBOX_INVARIANT(
+        sandbox.deflate(zs, Z_PARTIAL_FLUSH) != Z_STREAM_ERROR,
+        "deflate returned Z_STREAM_ERROR");
       size_t avail_out = std::min<size_t>(zs->avail_out, out_buffer_size);
       if (avail_out < out_buffer_size)
       {

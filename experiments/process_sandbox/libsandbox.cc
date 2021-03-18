@@ -225,7 +225,8 @@ namespace sandbox
       {
         default:
           // Should be unreachable
-          assert(0);
+          SANDBOX_DEBUG_INVARIANT(false, "Invalid RPC kind: {}", rpc.kind);
+          __builtin_unreachable();
           break;
         case ChunkMapSet:
           if ((safe = s.memory_provider->contains(
@@ -679,6 +680,8 @@ namespace sandbox
     static const int last_fd = OtherLibraries + libdirs.size();
     auto move_fd = [](int x) {
       assert(x >= 0);
+      SANDBOX_DEBUG_INVARIANT(
+        x >= 0, "Attempting to move invalid file descriptor {}", x);
       while (x < last_fd)
       {
         x = dup(x);
@@ -743,7 +746,11 @@ namespace sandbox
       "SANDBOX_LOCATION=%zx:%zx",
       (size_t)sharedmem_addr,
       (size_t)shm.get_size());
-    assert(loc_len < sizeof(location));
+    SANDBOX_INVARIANT(
+      loc_len < sizeof(location),
+      "Location length {} is smaller than expected {}",
+      loc_len,
+      sizeof(location));
     static_assert(
       OtherLibraries == 8, "First entry in LD_LIBRARY_PATH_FDS is incorrect");
     static_assert(

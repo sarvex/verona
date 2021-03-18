@@ -7,6 +7,8 @@
 #  include <sys/syscall.h>
 #  include <sys/time.h>
 
+#include "../helpers.h"
+
 namespace sandbox::platform
 {
   /**
@@ -37,7 +39,7 @@ namespace sandbox::platform
     void wake()
     {
       uint32_t old = flag.fetch_add(1, std::memory_order_release);
-      assert(old == 0);
+      SANDBOX_INVARIANT(old == 0, "Waking up one-bit semaphore that's already awake.  Count: {}.", old);
       futex_op(FUTEX_WAKE, 1);
     }
     bool wait(int milliseconds)

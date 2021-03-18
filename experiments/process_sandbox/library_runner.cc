@@ -10,7 +10,6 @@
 #include "shared.h"
 #include "shared_memory_region.h"
 
-#include <assert.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -140,10 +139,18 @@ namespace
     FlagLock g(lock);
     HostServiceRequest req{id, arg0, arg1};
     auto written_bytes = write(PageMapUpdates, &req, sizeof(req));
-    assert(written_bytes == sizeof(req));
+    SANDBOX_INVARIANT(
+      written_bytes == sizeof(req),
+      "Wrote {} bytes, expected {}",
+      written_bytes,
+      sizeof(req));
     HostServiceResponse response;
     auto read_bytes = read(PageMapUpdates, &response, sizeof(response));
-    assert(read_bytes == sizeof(response));
+    SANDBOX_INVARIANT(
+      read_bytes == sizeof(response),
+      "Read {} bytes, expected {}",
+      read_bytes,
+      sizeof(response));
 
     if (response.error)
     {
@@ -167,9 +174,14 @@ namespace sandbox
 {
   void ProxyPageMap::set(uintptr_t p, uint8_t x)
   {
-    assert(
+    SANDBOX_DEBUG_INVARIANT(
       (p >= reinterpret_cast<uintptr_t>(shared_memory_start)) &&
-      (p < reinterpret_cast<uintptr_t>(shared_memory_end)));
+        (p < reinterpret_cast<uintptr_t>(shared_memory_end)),
+      "Setting metadata pointer {} in pagemap that is outside of the sandbox "
+      "range {}--{}",
+      p,
+      shared_memory_start,
+      shared_memory_end);
     requestHostService(
       ChunkMapSet, reinterpret_cast<uintptr_t>(p), static_cast<uintptr_t>(x));
   }
@@ -207,7 +219,13 @@ namespace sandbox
   void ProxyPageMap::set_large_size(void* p, size_t size)
   {
     size_t size_bits = bits::next_pow2_bits(size);
-    assert((p >= shared_memory_start) && (p < shared_memory_end));
+    SANDBOX_DEBUG_INVARIANT(
+      (p >= shared_memory_start) && (p < shared_memory_end),
+      "Setting large size for pointer {} in pagemap that is outside of the "
+      "sandbox range {}--{}",
+      p,
+      shared_memory_start,
+      shared_memory_end);
     requestHostService(
       ChunkMapSetRange,
       reinterpret_cast<uintptr_t>(p),
@@ -216,7 +234,13 @@ namespace sandbox
 
   void ProxyPageMap::clear_large_size(void* p, size_t size)
   {
-    assert((p >= shared_memory_start) && (p < shared_memory_end));
+    SANDBOX_DEBUG_INVARIANT(
+      (p >= shared_memory_start) && (p < shared_memory_end),
+      "Clearing large size for pointer {} in pagemap that is outside of the "
+      "sandbox range {}--{}",
+      p,
+      shared_memory_start,
+      shared_memory_end);
     size_t size_bits = bits::next_pow2_bits(size);
     requestHostService(
       ChunkMapClearRange,
@@ -281,7 +305,9 @@ namespace
           exit(0);
         }
       } while (!shared->token.child.wait(INT_MAX));
-      assert(shared->token.is_child_executing);
+      SANDBOX_DEBUG_INVARIANT(
+        shared->token.is_child_executing,
+        "Child is executing when the parent thinks is is not");
       int idx = shared->function_index;
       void* buf = shared->msg_buffer;
       shared->msg_buffer = nullptr;
@@ -333,7 +359,10 @@ namespace
         ev += name_length;
         char* end;
         addr = reinterpret_cast<void*>(strtoull(ev, &end, 16));
-        assert(end[0] == ':');
+        SANDBOX_INVARIANT(
+          end[0] == ':',
+          "Expected ':' separator in environment variable, got '{}'",
+          end[0]);
         length = strtoull(end + 1, nullptr, 16);
         break;
       }
@@ -375,7 +404,11 @@ namespace
     }
     shared_memory_start = shared->start;
     shared_memory_end = shared->end;
-    assert(shared_pagemap == pagemap_chunk);
+    SANDBOX_INVARIANT(
+      shared_pagemap == pagemap_chunk,
+      "Mapping pagmemap chunk failed.  Expected {}, got {}",
+      pagemap_chunk,
+      shared_pagemap);
     (void)shared_pagemap;
 
     done_bootstrapping = true;
@@ -663,7 +696,12 @@ int main()
   // Check that our bootstrapping actually did the right thing and that
   // allocated objects are in the shared region.
   auto check_is_in_shared_range = [](void* ptr) {
-    assert((ptr >= shared_memory_start) && (ptr < shared_memory_end));
+    SANDBOX_DEBUG_INVARIANT(
+      (ptr >= shared_memory_start) && (ptr < shared_memory_end),
+      "Pointer {} is out of the sandbox range {}--{}",
+      ptr,
+      shared_memory_start,
+      shared_memory_end);
   };
   check_is_in_shared_range(current_alloc_pool());
   check_is_in_shared_range(ThreadAlloc::get_reference());
@@ -698,7 +736,8 @@ int main()
   sandbox_init();
   sandbox_invoke =
     reinterpret_cast<decltype(sandbox_invoke)>(dlfunc(handle, "sandbox_call"));
-  assert(sandbox_invoke && "Sandbox invoke invoke function not found");
+  SANDBOX_INVARIANT(
+    sandbox_invoke, "Sandbox invoke invoke function not found {}", dlerror());
 
   shared->token.is_child_executing = false;
   shared->token.is_child_loaded = true;

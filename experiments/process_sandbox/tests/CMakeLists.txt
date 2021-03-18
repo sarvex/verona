@@ -25,6 +25,7 @@ function(setup_sandbox_test_properties TEST_NAME)
 		INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR};${CMAKE_SOURCE_DIR}/../../src/rt/external/snmalloc/src"
 	)
 	target_link_libraries(${TEST_NAME} Threads::Threads)
+	target_link_libraries(${TEST_NAME} fmt)
 	if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 		target_link_libraries(${TEST_NAME} rt)
 	endif ()

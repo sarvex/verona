@@ -41,11 +41,11 @@ namespace sandbox::platform
     void wake()
     {
       uint32_t old = sem.count.fetch_add(1, std::memory_order_release);
-      assert(USEM_COUNT(old) == 0);
+      SANDBOX_INVARIANT(USEM_COUNT(old) == 0, "Waking up one-bit semaphore that's already awake.  Count: {}.", USEM_COUNT(old));
       if (old & USEM_HAS_WAITERS)
       {
         int ret = _umtx_op(&sem, UMTX_OP_SEM2_WAKE, 0, NULL, NULL);
-        assert(ret == 0);
+        SANDBOX_INVARIANT(ret == 0, "_umtx_op failed: {}", ret);
       }
     }
     bool wait(int milliseconds)

@@ -42,5 +42,5 @@ int main(void)
   newsock.reset(h.take());
   SANDBOX_INVARIANT(
     newsock.receive(&i, sizeof(i)), "Receiving over received socket failed");
-  SANDBOX_INVARIANT(i == 0x12345678, "Received value {:x} != 0x12345678");
+  SANDBOX_INVARIANT(i == 0x12345678, "Received value {:x} != 0x12345678", i);
 }

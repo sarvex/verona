@@ -51,8 +51,9 @@ namespace sandbox
    * Handler for invariant failures.  Not inlined, this is always a slow
    * path.  This should be called only by `invariant`.
    */
-  __attribute__((noinline)) void invariant_fail(
-    std::string_view msg, fmt::format_args args, source_location sl)
+  template<typename Msg>
+  __attribute__((noinline)) void
+  invariant_fail(Msg msg, fmt::format_args args, source_location sl)
   {
     std::string user_msg = fmt::vformat(msg, args);
     std::string final_msg = fmt::format(
@@ -105,13 +106,24 @@ namespace sandbox
     {
       if (!cond)
       {
-		  // TODO: With libfmt >= 7, this can do compile-time argument
-		  // checking.
+#if FMT_VERSION >= 70000
+        using Char = fmt::char_t<Msg>;
+        invariant_fail(
+          msg,
+          std::apply<fmt::format_arg_store<
+            fmt::buffer_context<Char>,
+            fmt::remove_reference_t<Args>...>(
+            const Msg&, const fmt::remove_reference_t<Args>&...)>(
+            fmt::make_args_checked<Args...>,
+            std::tuple_cat(std::make_tuple(msg), fmt_args)),
+          sl);
+#else
         invariant_fail(
           msg,
           std::apply(
             fmt::make_format_args<fmt::format_context, Args...>, fmt_args),
           sl);
+#endif
       }
     }
   }
@@ -121,21 +133,23 @@ namespace sandbox
    * arguments list.  Enabled in any build mode.
    */
 #define SANDBOX_INVARIANT(cond, msg, ...) \
-  sandbox::invariant(cond, msg, std::make_tuple(__VA_ARGS__))
+  sandbox::invariant(cond, FMT_STRING(msg), std::make_tuple(__VA_ARGS__))
 
   /**
    * Helper macro for calling `invariant` and constructing the format-string
    * arguments list.  Enabled only in debug builds.
    */
 #define SANDBOX_DEBUG_INVARIANT(cond, msg, ...) \
-  sandbox::invariant<DebugOnly>(cond, msg, std::make_tuple(__VA_ARGS__))
+  sandbox::invariant<DebugOnly>( \
+    cond, FMT_STRING(msg), std::make_tuple(__VA_ARGS__))
 
   /**
    * Helper macro for calling `invariant` and constructing the format-string
    * arguments list.  Enabled only in release builds.
    */
 #define SANDBOX_RELEASE_INVARIANT(cond, msg, ...) \
-  sandbox::invariant<ReleaseOnly>(cond, msg, std::make_tuple(__VA_ARGS__))
+  sandbox::invariant<ReleaseOnly>( \
+    cond, FMT_STRING(msg), std::make_tuple(__VA_ARGS__))
 
   /**
    * Helper that constructs a deleter from a C function, so that it can

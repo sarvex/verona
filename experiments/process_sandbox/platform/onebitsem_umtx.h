@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #if __has_include(<sys/umtx.h>)
+#  include "../helpers.h"
+
 #  include <atomic>
 #  include <sys/types.h>
 #  include <sys/umtx.h>
@@ -41,7 +43,10 @@ namespace sandbox::platform
     void wake()
     {
       uint32_t old = sem.count.fetch_add(1, std::memory_order_release);
-      SANDBOX_INVARIANT(USEM_COUNT(old) == 0, "Waking up one-bit semaphore that's already awake.  Count: {}.", USEM_COUNT(old));
+      SANDBOX_INVARIANT(
+        USEM_COUNT(old) == 0,
+        "Waking up one-bit semaphore that's already awake.  Count: {}.",
+        USEM_COUNT(old));
       if (old & USEM_HAS_WAITERS)
       {
         int ret = _umtx_op(&sem, UMTX_OP_SEM2_WAKE, 0, NULL, NULL);

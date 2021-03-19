@@ -16,25 +16,36 @@ else ()
 	add_compile_options(-mcx16 -Wall -Wextra -Werror "$<$<CONFIG:DEBUG>:-fno-inline>")
 endif()
 
-set(DEFAULT_KQUEUE false)
+set(DEFAULT_KQUEUE true)
 set(DEFAULT_PROCDESC false)
 set(DEFAULT_CAPSICUM false)
+set(DEFAULT_SECCOMP false)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
 	set(DEFAULT_PROCDESC true)
 	set(DEFAULT_CAPSICUM true)
 endif()
 
+if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+	set(DEFAULT_KQUEUE false)
+	set(DEFAULT_SECCOMP false)
+endif()
+
+set(ENABLE_KQUEUE ${DEFAULT_KQUEUE} CACHE BOOL "Use kqueue for monitoring file descriptors")
 set(ENABLE_PROCDESC ${DEFAULT_PROCDESC} CACHE BOOL "Use process descriptors and kqueue for creating the child process")
-set(ENABLE_CAPSICUM ${DEFAULT_CAPSICUM} CACHE BOOL "Use Capsicum to restruct child process privileges")
+set(ENABLE_CAPSICUM ${DEFAULT_CAPSICUM} CACHE BOOL "Use Capsicum to restrict child process privileges")
+set(ENABLE_SECCOMP ${DEFAULT_SECCOMP} CACHE BOOL "Use seccomp-pbf to restrict child process privileges")
 
 if (${ENABLE_KQUEUE})
+	message(STATUS "Using kqueue for polling")
 	add_definitions(-DUSE_KQUEUE)
 endif()
 if (${ENABLE_PROCDESC})
+	message(STATUS "Using process descriptors for monitoring child processes")
 	add_definitions(-DUSE_KQUEUE_PROCDESC)
 endif()
 if (${ENABLE_CAPSICUM})
+	message(STATUS "Using Capsicum for sandboxing")
 	add_definitions(-DUSE_CAPSICUM)
 endif()
 
@@ -53,8 +64,13 @@ target_link_libraries(sandbox fmt)
 target_link_options(library_runner PRIVATE -Wl,-export-dynamic)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-	target_link_libraries(library_runner -ldl -lbsd -lseccomp)
+	target_link_libraries(library_runner -ldl -lbsd)
 	target_link_libraries(sandbox -ldl -lbsd -lrt)
+endif()
+
+if (${ENABLE_SECCOMP})
+	message(STATUS "Using seccomp-bpf for sandboxing")
+	target_link_libraries(library_runner -lseccomp)
 endif()
 
 

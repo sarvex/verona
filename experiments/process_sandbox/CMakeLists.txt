@@ -28,7 +28,7 @@ endif()
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 	set(DEFAULT_KQUEUE false)
-	set(DEFAULT_SECCOMP false)
+	set(DEFAULT_SECCOMP true)
 endif()
 
 set(ENABLE_KQUEUE ${DEFAULT_KQUEUE} CACHE BOOL "Use kqueue for monitoring file descriptors")

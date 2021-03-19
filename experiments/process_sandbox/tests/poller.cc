@@ -21,7 +21,7 @@ void test_poller()
   std::unordered_set<int> read_fds;
   int closed_fds = 0;
   static constexpr int fd_count = 5;
-  std::atomic<int> read_fd_count;
+  std::atomic<int> read_fd_count{0};
   std::thread t([&]() {
     while (closed_fds < fd_count)
     {

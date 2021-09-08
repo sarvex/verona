@@ -117,7 +117,7 @@ stages:
           CXX: clang++
           CXXFLAGS: -stdlib=libstdc++
           BuildType: Debug
-          SANITIZER: address,undefined,leak
+          SANITIZER:
 
     variables:
       - template: ./vars/anybuild-vars.yml

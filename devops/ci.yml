@@ -298,13 +298,13 @@ jobs:
   - script: |
       call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
       cd build
-      ninja func-con-external_event_source.exe
+      ninja
     displayName: 'Compile'
 
   - script: |
       call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
       cd build
-      ctest -j 4 --output-on-failure -R func-con-external_event_source
+      ctest -j 4 --output-on-failure -Rruntime
     displayName: 'Test'
 
   - task: ComponentGovernanceComponentDetection@0

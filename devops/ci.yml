@@ -304,7 +304,7 @@ jobs:
   - script: |
       call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
       cd build
-      ctest -j 4 --output-on-failure -Rfunc-con-external_event_source
+      ctest -j 4 --output-on-failure -R func-con-external_event_source
     displayName: 'Test'
 
   - task: ComponentGovernanceComponentDetection@0
